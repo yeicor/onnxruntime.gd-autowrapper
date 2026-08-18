@@ -70,6 +70,7 @@ def _field(d: dict) -> M.FieldDecl:
 def _class(d: dict) -> M.ClassDecl:
     return M.ClassDecl(
         name=d["name"],
+        cpp_qual_name=d.get("cpp_qual_name", ""),
         wrapper_name=d.get("wrapper_name", ""),
         module_name=d.get("module_name", ""),
         base_classes=list(d.get("base_classes", [])),
@@ -181,6 +182,7 @@ def _field_out(f: M.FieldDecl) -> dict:
 def _class_out(c: M.ClassDecl) -> dict:
     d = {
         "name": c.name,
+        "cpp_qual_name": c.cpp_qual_name,
         "wrapper_name": c.wrapper_name,
         "module_name": c.module_name,
         "base_classes": c.base_classes,

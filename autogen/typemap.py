@@ -498,7 +498,7 @@ def cpp_param(t: OCCTType, name: str, ctx: TypeContext,
         # the wrapper's String return for Print/Dump-style methods (flush runs
         # before the return).
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"occt_gd::OcgCallableOStream ocg_os({name});",
+                         prelude=f"ort_gd::OcgCallableOStream ocg_os({name});",
                          call_expr="ocg_os.stream()",
                          is_ostream=True)
     if t.is_ref and stream == "ss":
@@ -510,7 +510,7 @@ def cpp_param(t: OCCTType, name: str, ctx: TypeContext,
         # that OCCT pulls String chunks from as it reads (see the
         # OcgCallableIStream shim).
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"occt_gd::OcgCallableIStream ocg_is({name});",
+                         prelude=f"ort_gd::OcgCallableIStream ocg_is({name});",
                          call_expr="ocg_is.stream()")
     if t.is_ref and not t.is_const:
         # Non-const reference = in/out parameter.  Primitives and strings use
@@ -636,12 +636,12 @@ def _cpp_pointer_param(t: OCCTType, name: str, ctx: TypeContext) -> ParamConv | 
         # Standard_OStream* / std::ostream* sink (e.g.
         # FastSewing::GetStatuses) — same Callable shim as the ref form.
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"occt_gd::OcgCallableOStream ocg_os({name});",
+                         prelude=f"ort_gd::OcgCallableOStream ocg_os({name});",
                          call_expr="&ocg_os.stream()",
                          is_ostream=True)
     if skind == "in":
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"occt_gd::OcgCallableIStream ocg_is({name});",
+                         prelude=f"ort_gd::OcgCallableIStream ocg_is({name});",
                          call_expr="&ocg_is.stream()")
     if b == "void":
         cast = "const void*" if t.pointee_is_const else "void*"
@@ -813,12 +813,8 @@ def _ptr_ref_out_param(t: OCCTType, name: str, ctx: TypeContext) -> ParamConv | 
     if w in ctx.handles:
         postlude = f"{guard} {{ {name}->_handle = {pvar}; }}"
     elif w in ctx.unique_ptr:
-        if w in ctx.stdalloc:
-            postlude = (f"{guard} {{ {name}->_native.reset("
-                        f"occt_gd::occt_alloc_new<{_occt_qual(key)}>(*{pvar})); }}")
-        else:
-            postlude = (f"{guard} {{ {name}->_native = "
-                        f"std::make_unique<{_occt_qual(key)}>(*{pvar}); }}")
+        postlude = (f"{guard} {{ {name}->_native = "
+                    f"std::make_unique<{_occt_qual(key)}>(*{pvar}); }}")
     else:
         native = "_native_ref()" if w in ctx.inherited_value else "_native"
         postlude = f"{guard} {{ {name}->{native} = *{pvar}; }}"
@@ -974,12 +970,8 @@ def _cpp_return_core(t: OCCTType, ctx: TypeContext, has_ostream: bool,
                     "        return wrapper;")
         elif w in ctx.unique_ptr:
             decl = "auto& result" if t.is_ref else "auto result"
-            if w in ctx.stdalloc:
-                native_assign = (f"wrapper->_native.reset("
-                                 f"occt_gd::occt_alloc_new<{_occt_qual(key)}>(result));")
-            else:
-                native_assign = (f"wrapper->_native = "
-                                 f"std::make_unique<{_occt_qual(key)}>(result);")
+            native_assign = (f"wrapper->_native = "
+                             f"std::make_unique<{_occt_qual(key)}>(result);")
             body = (decl + " = {call};\n"
                     "        Ref<" + w + "> wrapper; wrapper.instantiate();\n"
                     "        " + native_assign + "\n"
@@ -1041,12 +1033,8 @@ def _cpp_pointer_return(t: OCCTType, ctx: TypeContext) -> RetConv | None:
                     "        wrapper->_handle = " + deref + "result;" + sync + "\n"
                     "        return wrapper;")
         elif w in ctx.unique_ptr:
-            if w in ctx.stdalloc:
-                native_assign = (f"wrapper->_native.reset("
-                                 f"occt_gd::occt_alloc_new<{_occt_qual(key)}>(*result));")
-            else:
-                native_assign = (f"wrapper->_native = "
-                                 f"std::make_unique<{_occt_qual(key)}>(*result);")
+            native_assign = (f"wrapper->_native = "
+                             f"std::make_unique<{_occt_qual(key)}>(*result);")
             body = ("auto result = {call};\n"
                     '        if (!result) { return Ref<' + w + '>(); }\n'
                     "        Ref<" + w + "> wrapper; wrapper.instantiate();\n"
@@ -1070,6 +1058,22 @@ def _cpp_pointer_return(t: OCCTType, ctx: TypeContext) -> RetConv | None:
 
 
 def _occt_qual(base_name: str) -> str:
+    if "::" in base_name:
+        return f"::{base_name.lstrip(':')}"
+    if base_name in (
+        "Env", "Session", "SessionOptions", "RunOptions", "Value", "MemoryInfo",
+        "ModelMetadata", "TypeInfo", "TensorTypeAndShapeInfo", "AllocatorWithDefaultOptions",
+        "CustomOpConfigs", "ThreadingOptions", "ArenaCfg", "IoBinding", "Status",
+        "Exception", "Float16_t", "BFloat16_t", "Float8E4M3FN_t", "Float8E4M3FNUZ_t",
+        "Float8E5M2_t", "Float8E5M2FNUZ_t", "Logger", "MemoryAllocation",
+        "SequenceTypeInfo", "MapTypeInfo", "KernelInfo", "KernelContext",
+        "Op", "OpAttr", "Node", "Graph", "Model", "OperatorSet", "Allocator",
+        "CUDAProviderOptions", "TensorRTProviderOptions", "KeyValuePairs",
+        "PrepackedWeightsContainer", "SyncStream", "EpDevice", "ModelCompilationOptions",
+        "ExternalInitializerInfo", "AttrNameSubgraph", "ValueInfo", "ValueInfoConsumerProducerInfo",
+        "ShapeInferContext", "CustomOpDomain"
+    ):
+        return f"::Ort::{base_name}"
     return f"::{base_name}"
 
 
@@ -1113,12 +1117,8 @@ def _cpp_optional_return(t: OCCTType, ctx: TypeContext) -> RetConv | None:
                 "        wrapper->_handle = *result;" + sync + "\n"
                 "        return ::godot::Variant(wrapper);")
     elif w in ctx.unique_ptr:
-        if w in ctx.stdalloc:
-            native_assign = (f"wrapper->_native.reset("
-                             f"occt_gd::occt_alloc_new<{_occt_qual(key)}>(*result));")
-        else:
-            native_assign = (f"wrapper->_native = "
-                             f"std::make_unique<{_occt_qual(key)}>(*result);")
+        native_assign = (f"wrapper->_native = "
+                         f"std::make_unique<{_occt_qual(key)}>(*result);")
         body = ("auto result = {call};\n"
                 "        if (!result) { return ::godot::Variant(); }\n"
                 "        Ref<" + w + "> wrapper; wrapper.instantiate();\n"

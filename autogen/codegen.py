@@ -385,7 +385,9 @@ def _cg(cls: ClassDecl, ctx: tm.TypeContext) -> CgClass:
 
 
 def _occt_qual(cls: ClassDecl) -> str:
-    return f"::{cls.name}"
+    if cls.cpp_qual_name:
+        return cls.cpp_qual_name
+    return tm._occt_qual(cls.name)
 
 
 def _params_decl(method: MethodDecl, ctx: tm.TypeContext,
@@ -829,14 +831,13 @@ def _inherited_cast_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
                 (f"        if (S.is_null() || S->_native.IsNull()) {{")
         bodies.append(f"""Ref<{child.wrapper_name}> {cls.wrapper_name}::{_inherited_cast_name(child)}(Ref<{cls.wrapper_name}> S) {{
     try {{
-        OCC_CATCH_SIGNALS
 {guard}
             return Ref<{child.wrapper_name}>();
         }}
         Ref<{child.wrapper_name}> wrapper; wrapper.instantiate();
         wrapper->_native_ref() = ::{pkg}::{tag}(S->_native);
         return wrapper;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}""")
     if all(_inherited_cast_discriminator(c) is not None for c in children):
         cases = "\n".join(
@@ -845,7 +846,6 @@ def _inherited_cast_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
             for c in children)
         bodies.append(f"""Ref<{cls.wrapper_name}> {cls.wrapper_name}::cast(Ref<{cls.wrapper_name}> S) {{
     try {{
-        OCC_CATCH_SIGNALS
         if (S.is_null() || S->_native.IsNull()) {{
             return Ref<{cls.wrapper_name}>();
         }}
@@ -854,7 +854,7 @@ def _inherited_cast_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
         default:
             return S;
         }}
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}""")
     return bodies
 
@@ -946,19 +946,20 @@ def generate_class_hpp(cls: ClassDecl, ctx: tm.TypeContext) -> str:
     out.extend(_nested_enum_hpp_lines(cls))
     if _public_nested_enums(cls):
         out.append("")
+    qual = _occt_qual(cls)
     if cg.storage == "handle":
-        out.append(f"    opencascade::handle<{cls.name}> _handle;")
+        out.append(f"    opencascade::handle<{qual}> _handle;")
     elif cg.storage == "unique_ptr":
         if _uses_stdalloc(cls, ctx):
-            out.append(f"    std::unique_ptr<{cls.name}, "
-                       f"occt_gd::OcgStdAllocDeleter<{cls.name}>> _native = nullptr;")
+            out.append(f"    std::unique_ptr<{qual}, "
+                       f"occt_gd::OcgStdAllocDeleter<{qual}>> _native = nullptr;")
         else:
-            out.append(f"    std::unique_ptr<{cls.name}> _native = nullptr;")
+            out.append(f"    std::unique_ptr<{qual}> _native = nullptr;")
     elif cg.inherited_native:
-        out.append(f"    {cls.name}& _native_ref() {{ return *static_cast<{cls.name}*>(&this->_native); }}")
-        out.append(f"    const {cls.name}& _native_ref() const {{ return *static_cast<const {cls.name}*>(&this->_native); }}")
+        out.append(f"    {qual}& _native_ref() {{ return *static_cast<{qual}*>(&this->_native); }}")
+        out.append(f"    const {qual}& _native_ref() const {{ return *static_cast<const {qual}*>(&this->_native); }}")
     elif cg.storage == "native":
-        out.append(f"    {cls.name} _native;")
+        out.append(f"    {qual} _native;")
     out.append("")
     out.append("    static void _bind_methods();")
     cast_decls = _inherited_cast_decls(cls, ctx)
@@ -1092,13 +1093,12 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
             return None
         return f"""String {cls.wrapper_name}::add_values_separator({params}) {{
     try {{
-        OCC_CATCH_SIGNALS
-        occt_gd::OcgCallableOStream ocg_os(theOStream);
+        ort_gd::OcgCallableOStream ocg_os(theOStream);
         ocg_os.stream() << ", ";
         ::godot::String ocg_text = ::godot::String::utf8(ocg_os.str().c_str());
         ocg_os.stream().flush();
         return ocg_text;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
     if cls.name != "BRepTools" or method.name not in ("Read", "Write"):
         return None
@@ -1135,9 +1135,8 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
     ]
     return f"""bool {cls.wrapper_name}::{unique}({params}){const_suffix} {{
     try {{
-        OCC_CATCH_SIGNALS
 {chr(10).join(body_lines)}
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
 
 
@@ -1205,11 +1204,10 @@ def _method_body(cls: ClassDecl, method: MethodDecl,
         body_lines.append(f"        {_inject_postludes(rconv.body, call, postludes)}")
     else:
         body_lines.append(f"        {rconv.body.replace('{call}', call)}")
-    catch = ("OCCT_GUARD_CATCH_VOID();" if rconv.cpp_type == "void"
-             else "OCCT_GUARD_CATCH({});")
+    catch = ("ORT_GUARD_CATCH_VOID();" if rconv.cpp_type == "void"
+             else "ORT_GUARD_CATCH({});")
     return f"""{rconv.cpp_type} {cls.wrapper_name}::{unique}({params}){const_suffix} {{
     try {{
-        OCC_CATCH_SIGNALS
 {guard}{chr(10).join(body_lines)}
     }} {catch}
 }}"""
@@ -1267,55 +1265,48 @@ def _ctor_body(cls: ClassDecl, ctor: MethodDecl, ctx: tm.TypeContext) -> str:
     post = "\n".join(f"        {p}" for p in postludes)
     cg = _cg(cls, ctx)
     if cg.storage == "unique_ptr":
-        if _uses_stdalloc(cls, ctx):
-            new_expr = f"ref->_native.reset(occt_gd::occt_alloc_new<{_occt_qual(cls)}>({args}));"
-        else:
-            new_expr = f"ref->_native = std::make_unique<{_occt_qual(cls)}>({args});"
+        new_expr = f"ref->_native = std::make_unique<{_occt_qual(cls)}>({args});"
         tail = f"\n{post}" if postludes else ""
         return f"""Ref<{cls.wrapper_name}> {cls.wrapper_name}::{unique}({params}) {{
     try {{
-        OCC_CATCH_SIGNALS
         Ref<{cls.wrapper_name}> ref; ref.instantiate();
-        occt_gd::clear_last_error();
+        ort_gd::clear_last_error();
 {pre}        {new_expr}{tail}
         return ref;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
     if cg.storage == "handle":
         sync = "\n        ref->_sync_base_storage();" if cg.has_sync else ""
         tail = f"\n{post}" if postludes else ""
         return f"""Ref<{cls.wrapper_name}> {cls.wrapper_name}::{unique}({params}) {{
     try {{
-        OCC_CATCH_SIGNALS
         Ref<{cls.wrapper_name}> ref; ref.instantiate();
-        occt_gd::clear_last_error();
+        ort_gd::clear_last_error();
 {pre}        ref->_handle = new {_occt_qual(cls)}({args});
 {sync}{tail}
         return ref;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
     if cg.inherited_native:
         tail = f"\n{post}" if postludes else ""
         return f"""Ref<{cls.wrapper_name}> {cls.wrapper_name}::{unique}({params}) {{
     try {{
-        OCC_CATCH_SIGNALS
         Ref<{cls.wrapper_name}> ref; ref.instantiate();
-        occt_gd::clear_last_error();
+        ort_gd::clear_last_error();
 {pre}        ref->_native_ref() = {_occt_qual(cls)}({args});
 {tail}
         return ref;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
     tail = f"\n{post}" if postludes else ""
     return f"""Ref<{cls.wrapper_name}> {cls.wrapper_name}::{unique}({params}) {{
     try {{
-        OCC_CATCH_SIGNALS
         Ref<{cls.wrapper_name}> ref; ref.instantiate();
-        occt_gd::clear_last_error();
+        ort_gd::clear_last_error();
 {pre}        new (&ref->_native) {_occt_qual(cls)}({args});
 {tail}
         return ref;
-    }} OCCT_GUARD_CATCH({{}});
+    }} ORT_GUARD_CATCH({{}});
 }}"""
 
 
@@ -1327,10 +1318,9 @@ def _plain_ctor_body(cls: ClassDecl, ctx: tm.TypeContext) -> str:
             sync = "\n        _sync_base_storage();" if cg.has_sync else ""
             return f"""{cls.wrapper_name}::{cls.wrapper_name}() : {base_init} {{
     try {{
-        OCC_CATCH_SIGNALS
         _handle = new {_occt_qual(cls)}();
 {sync}
-    }} OCCT_GUARD_CATCH_CTOR()
+    }} ORT_GUARD_CATCH_CTOR()
 }}"""
         return f"""{cls.wrapper_name}::{cls.wrapper_name}() : {base_init} {{
     // No default constructor -- _handle is null; use factory methods
@@ -1344,6 +1334,9 @@ def _plain_ctor_body(cls: ClassDecl, ctx: tm.TypeContext) -> str:
 }}"""
     if cg.inherited_native:
         return f"""{cls.wrapper_name}::{cls.wrapper_name}() : {base_init} {{
+}}"""
+    if cls.name == "Env":
+        return f"""{cls.wrapper_name}::{cls.wrapper_name}() : {base_init} , _native(ORT_LOGGING_LEVEL_WARNING, "ONNXRuntime") {{
 }}"""
     return (f"""{cls.wrapper_name}::{cls.wrapper_name}() : {base_init} , _native() {{
 }}""")
@@ -1812,9 +1805,8 @@ def generate_class_cpp(cls: ClassDecl, ctx: tm.TypeContext) -> str:
     if cg.storage == "handle" and not any(m.name == "is_null" for m in cls.all_methods):
         out.append(f"bool {cls.wrapper_name}::is_null() const {{")
         out.append("    try {")
-        out.append("        OCC_CATCH_SIGNALS")
         out.append("        return _handle.IsNull();")
-        out.append("    } OCCT_GUARD_CATCH({});")
+        out.append("    } ORT_GUARD_CATCH({});")
         out.append("}")
         out.append("")
     out.extend(_inherited_cast_bodies(cls, ctx))
@@ -1834,11 +1826,7 @@ def generate_enums_hpp(modules: list[ModuleDecl]) -> str:
     out.append("#pragma once")
     out.append("")
     out.append(GODOT_INCLUDES)
-    out.append("")
-    out.append(GCC_CHANGES)
-    out.append("")
-    for enum in enums:
-        out.append(f"#include <{Path(enum.header_file).name}>")
+    out.append("#include <onnxruntime_cxx_api.h>")
     out.append("")
     out.append("namespace godot {")
     out.append("")
@@ -1848,15 +1836,10 @@ def generate_enums_hpp(modules: list[ModuleDecl]) -> str:
     out.append("public:")
     out.append("    OcgEnums() = default;")
     out.append("")
-    out.append("    static void _bind_methods();")
-    out.append("")
     for enum in enums:
-        out.append(f"    enum {enum.name} : int64_t {{")
-        for v in enum.values:
-            out.append(
-                f"        {enum.name}_{v.name} = static_cast<int64_t>(::{enum.name}::{v.name}),")
-        out.append("    };")
+        out.extend(_enum_lines(enum))
         out.append("")
+    out.append("    static void _bind_methods();")
     out.append("};")
     out.append("")
     out.append("} // namespace godot")
@@ -1872,17 +1855,12 @@ def generate_enums_cpp(modules: list[ModuleDecl]) -> str:
     out.append("// Auto-generated host class for standalone OCCT enums -- DO NOT EDIT")
     out.append('#include "OcgEnums.hpp"')
     out.append("")
-    out.append("#include <godot_cpp/core/error_macros.hpp>")
-    out.append("")
     out.append("namespace godot {")
     out.append("")
     out.append("void OcgEnums::_bind_methods() {")
     for enum in enums:
         for v in enum.values:
-            out.append(
-                f'    ClassDB::bind_integer_constant(get_class_static(), '
-                f'"{enum.name}", "{v.name}", '
-                f"static_cast<int64_t>(OcgEnums::{enum.name}_{v.name}));")
+            out.append(f'    BIND_ENUM_CONSTANT({enum.name}_{v.name});')
     out.append("}")
     out.append("")
     out.append("} // namespace godot")
@@ -1894,127 +1872,92 @@ def generate_enums_cpp(modules: list[ModuleDecl]) -> str:
 # OcgPrimitiveWrappers.hpp
 # ---------------------------------------------------------------------------
 
-_PRIMITIVE_WRAPPERS: dict[str, tuple[str, str, str, str, str]] = {
-    "bool": ("OcgStandardBoolean", "bool", "BOOL",
+_BOX_CLASSES = [
+    ("bool", ("OcgStandardBoolean", "bool", "BOOL",
              "bool get_value() const { return _native; }",
-             "void set_value(bool v) { _native = v; }"),
-    "unsigned char": ("OcgStandardByte", "uint8_t", "INT",
+             "void set_value(bool v) { _native = v; }")),
+    ("unsigned char", ("OcgStandardByte", "uint8_t", "INT",
                       "uint8_t get_value() const { return _native; }",
-                      "void set_value(uint8_t v) { _native = v; }"),
-    "char": ("OcgStandardCharacter", "char", "INT",
+                      "void set_value(uint8_t v) { _native = v; }")),
+    ("char", ("OcgStandardCharacter", "char", "INT",
              "int32_t get_value() const { return (int32_t)_native; }",
-             "void set_value(int32_t v) { _native = static_cast<char>(v); }"),
-    "char16_t": ("OcgStandardChar16", "char16_t", "INT",
+             "void set_value(int32_t v) { _native = static_cast<char>(v); }")),
+    ("char16_t", ("OcgStandardChar16", "char16_t", "INT",
                  "int32_t get_value() const { return (int32_t)_native; }",
-                 "void set_value(int32_t v) { _native = static_cast<char16_t>(v); }"),
-    "int": ("OcgStandardInteger", "int32_t", "INT",
+                 "void set_value(int32_t v) { _native = static_cast<char16_t>(v); }")),
+    ("int", ("OcgStandardInteger", "int32_t", "INT",
             "int32_t get_value() const { return _native; }",
-            "void set_value(int32_t v) { _native = v; }"),
-    "long": ("OcgStandardLongInteger", "long", "INT",
+            "void set_value(int32_t v) { _native = v; }")),
+    ("long", ("OcgStandardLongInteger", "int64_t", "INT",
              "int64_t get_value() const { return _native; }",
-             "void set_value(int64_t v) { _native = static_cast<long>(v); }"),
-    "double": ("OcgStandardReal", "double", "FLOAT",
+             "void set_value(int64_t v) { _native = static_cast<long>(v); }")),
+    ("double", ("OcgStandardReal", "double", "FLOAT",
                "double get_value() const { return _native; }",
-               "void set_value(double v) { _native = v; }"),
-    "float": ("OcgStandardShortReal", "float", "FLOAT",
+               "void set_value(double v) { _native = v; }")),
+    ("float", ("OcgStandardShortReal", "float", "FLOAT",
               "float get_value() const { return _native; }",
-              "void set_value(float v) { _native = v; }"),
-    "unsigned long": ("OcgStandardULongInteger", "unsigned long", "INT",
+              "void set_value(float v) { _native = v; }")),
+    ("unsigned long", ("OcgStandardULongInteger", "uint64_t", "INT",
                       "uint64_t get_value() const { return _native; }",
-                      "void set_value(uint64_t v) { _native = static_cast<unsigned long>(v); }"),
-    "unsigned int": ("OcgStandardUInteger", "uint32_t", "INT",
+                      "void set_value(uint64_t v) { _native = static_cast<unsigned long>(v); }")),
+    ("unsigned int", ("OcgStandardUInteger", "uint32_t", "INT",
                      "uint32_t get_value() const { return _native; }",
-                     "void set_value(uint32_t v) { _native = v; }"),
-    "TCollection_AsciiString": (
-        "OcgTCollectionAsciiString", "TCollection_AsciiString", "STRING",
-        "::godot::String get_value() const { return ::godot::String::utf8(_native.ToCString()); }",
-        "void set_value(const ::godot::String& v) { _native = TCollection_AsciiString(v.utf8().get_data()); }"),
-    "TCollection_ExtendedString": (
-        "OcgTCollectionExtendedString", "TCollection_ExtendedString", "STRING",
-        "::godot::String get_value() const { Standard_Integer ocg_len = _native.LengthOfCString();char* ocg_buf = new char[ocg_len + 1];_native.ToUTF8CString(ocg_buf);ocg_buf[ocg_len] = '\\0';::godot::String ocg_ret = ::godot::String::utf8(ocg_buf);delete[] ocg_buf;return ocg_ret; }",
-        "void set_value(const ::godot::String& v) { _native = TCollection_ExtendedString(v.utf8().get_data()); }"),
-}
+                     "void set_value(uint32_t v) { _native = v; }")),
+]
 
 
-def _primitive_wrapper_names_used(modules: list[ModuleDecl],
-                                  ctx: tm.TypeContext) -> set[str]:
-    keys: set[str] = set()
-    for module in modules:
-        for cls in module.classes:
-            if cls.skip:
-                continue
-            for method in cls.all_methods:
-                for p in method.parameters:
-                    if (p.type.is_ref and not p.type.is_const) \
-                            or (p.type.is_pointer and not p.type.pointee_is_const):
-                        if p.type.base_name in tm.PRIMITIVE_WRAPPER_MAP:
-                            keys.add(p.type.base_name)
-    return keys
-
-
-def generate_primitive_wrappers(keys: set[str],
-                                enum_box_decls: dict[str, object]) -> str:
+def generate_primitive_wrappers_hpp(modules: list[ModuleDecl], ctx: tm.TypeContext) -> str:
+    enum_boxes = _enum_box_keys_used(modules, ctx)
     out: list[str] = []
-    out.append("// Auto-generated primitive wrapper classes for non-const ref output params -- DO NOT EDIT")
+    out.append("// Auto-generated primitive box classes for in/out parameters -- DO NOT EDIT")
     out.append("#pragma once")
     out.append("")
-    out.append("#include <godot_cpp/classes/ref_counted.hpp>")
-    out.append("#include <godot_cpp/core/class_db.hpp>")
-    out.append("#include <godot_cpp/variant/string.hpp>")
+    out.append(GODOT_INCLUDES)
+    out.append("#include <onnxruntime_cxx_api.h>")
     out.append("")
-    for key in sorted(keys):
-        if key.startswith("TCollection_"):
-            out.append(f"#include <{key}.hxx>")
-    for enum_name in sorted(enum_box_decls):
-        enum_decl = enum_box_decls[enum_name]
-        header = Path(enum_decl.header_file).name if enum_decl.header_file else ""
-        if header:
-            out.append(f"#include <{header}>")
+    out.append("namespace godot {")
     out.append("")
-    out.append("using namespace godot;")
-    out.append("")
-    for key in sorted(keys, key=lambda k: _PRIMITIVE_WRAPPERS[k][0]):
-        wclass, native, gd, getter, setter = _PRIMITIVE_WRAPPERS[key]
-        out.append(f"class {wclass} : public RefCounted {{")
-        out.append(f"    GDCLASS({wclass}, RefCounted)")
+    for occt_type, (box_name, native_type, gd_type, getter, setter) in _BOX_CLASSES:
+        out.append(f"class {box_name} : public RefCounted {{")
+        out.append(f"    GDCLASS({box_name}, RefCounted)")
         out.append("public:")
-        out.append(f"    {native} _native;")
+        out.append(f"    {native_type} _native = {{}};")
         out.append("")
-        out.append(f"    {wclass}() : RefCounted(), _native() {{}}")
+        out.append(f"    {box_name}() = default;")
+        out.append(f"    {box_name}({native_type} v) : _native(v) {{}}")
         out.append("")
         out.append(f"    {getter}")
         out.append(f"    {setter}")
         out.append("")
-        out.append("protected:")
         out.append("    static void _bind_methods() {")
-        out.append(f"        ClassDB::bind_method(D_METHOD(\"get_value\"), &{wclass}::get_value);")
-        out.append(f"        ClassDB::bind_method(D_METHOD(\"set_value\", \"value\"), &{wclass}::set_value);")
-        out.append(f"        ClassDB::add_property(get_class_static(), PropertyInfo(Variant::{gd}, \"value\"), \"set_value\", \"get_value\");")
+        out.append(f'        ClassDB::bind_method(D_METHOD("get_value"), &{box_name}::get_value);')
+        out.append(f'        ClassDB::bind_method(D_METHOD("set_value", "value"), &{box_name}::set_value);')
+        out.append(f'        ADD_PROPERTY(PropertyInfo(Variant::{gd_type}, "value"), "set_value", "get_value");')
         out.append("    }")
         out.append("};")
         out.append("")
-    for enum_name in sorted(enum_box_decls):
-        enum_decl = enum_box_decls[enum_name]
-        box = tm._enum_box_class_name(enum_name)
+    for enum_name, (box_name, enum_decl) in sorted(enum_boxes.items()):
         path = tm._enum_occt_path(enum_decl)
-        out.append(f"class {box} : public RefCounted {{")
-        out.append(f"    GDCLASS({box}, RefCounted)")
+        out.append(f"class {box_name} : public RefCounted {{")
+        out.append(f"    GDCLASS({box_name}, RefCounted)")
         out.append("public:")
-        out.append(f"    {path} _native;")
+        out.append(f"    int64_t _native = 0;")
         out.append("")
-        out.append(f"    {box}() : RefCounted(), _native() {{}}")
+        out.append(f"    {box_name}() = default;")
+        out.append(f"    {box_name}(int64_t v) : _native(v) {{}}")
+        out.append(f"    {box_name}({path} v) : _native(static_cast<int64_t>(v)) {{}}")
         out.append("")
-        out.append(f"    int32_t get_value() const {{ return static_cast<int32_t>(_native); }}")
-        out.append(f"    void set_value(int32_t v) {{ _native = static_cast<{path}>(v); }}")
+        out.append("    int64_t get_value() const { return _native; }")
+        out.append("    void set_value(int64_t v) { _native = v; }")
         out.append("")
-        out.append("protected:")
         out.append("    static void _bind_methods() {")
-        out.append(f"        ClassDB::bind_method(D_METHOD(\"get_value\"), &{box}::get_value);")
-        out.append(f"        ClassDB::bind_method(D_METHOD(\"set_value\", \"value\"), &{box}::set_value);")
-        out.append(f"        ClassDB::add_property(get_class_static(), PropertyInfo(Variant::INT, \"value\"), \"set_value\", \"get_value\");")
+        out.append(f'        ClassDB::bind_method(D_METHOD("get_value"), &{box_name}::get_value);')
+        out.append(f'        ClassDB::bind_method(D_METHOD("set_value", "value"), &{box_name}::set_value);')
+        out.append('        ADD_PROPERTY(PropertyInfo(Variant::INT, "value"), "set_value", "get_value");')
         out.append("    }")
         out.append("};")
         out.append("")
+    out.append("} // namespace godot")
     return "\n".join(out) + "\n"
 
 
@@ -2023,66 +1966,7 @@ def generate_primitive_wrappers(keys: set[str],
 # ---------------------------------------------------------------------------
 
 def generate_callable_streams_hpp() -> str:
-    """Stream <-> Godot Callable trampolines used by every wrapper.
-
-    OCCT methods that consume a ``Standard_OStream&``/``std::ostream&`` (or
-    the pointer/`istream` spellings) are exposed to GDScript as Callables.
-    ``OcgCallableOStream`` adapts a sink Callable to the ``std::ostream`` OCCT
-    writes to; ``OcgCallableIStream`` adapts a source Callable to the
-    ``std::istream`` OCCT reads from.  The shims are header-only so wrapper
-    TUs pick them up via ``#include "OcgCallableStreams.hpp"`` and no extra
-    link-time object is needed.
-    """
-    return """// Auto-generated Callable <-> std::stream trampolines -- DO NOT EDIT
-//
-// OCCT methods that write to / read from a std::ostream& / std::istream& (and
-// the OCCT typedefs Standard_OStream / Standard_IStream) are exposed to
-// GDScript as Godot Callables.  These two small shims adapt a Callable to the
-// std::stream interface OCCT uses:
-//
-//   * OcgCallableOStream (sink): OCCT writes text into the shim's ostream;
-//     the accumulated text is forwarded to the Callable, which receives a
-//     single String argument, when the stream is flushed.  The generated
-//     wrappers always flush before returning (and after capturing the text
-//     for Print/Dump-style String returns), so a sink with an invalid
-//     Callable simply discards the output.
-//
-//   * OcgCallableIStream (source): OCCT reads text from the shim's istream;
-//     whenever the input area is exhausted the shim calls the Callable (with
-//     no arguments) to fetch the next chunk, given back as a String.  An
-//     empty String signals end of input, and an invalid Callable yields an
-//     empty (EOF) stream.
-//
-// LOCALE NOTE: Godot's binary embeds its own copy of libstdc++ and exports
-// std::locale symbols, so wrapper code can end up touching TWO different
-// libstdc++ copies at once:
-//
-//   * Versioned symbol references in this .so (e.g. std::locale's copy
-//     constructor, destructor and std::locale::classic(), resolved as
-//     `_ZNSt6locale*@GLIBCXX_3.4`) bind to the SYSTEM libstdc++.
-//   * basic_ios::init's inline `std::locale()` calls the interposed
-//     `locale::_S_global()` from GODOT's embedded copy, handing the stream a
-//     locale object whose _Impl belongs to Godot's libstdc++.
-//
-// The two copies disagree on reference-count bookkeeping, so every stream
-// construction net-drains one reference from that shared _Impl (verified:
-// the same _Impl's count walks 3 -> 2 -> 1 across successive shims even
-// while a permanent "pin" reference is held).  When the count reaches zero,
-// system libstdc++ destroys the _Impl through Godot's copy and the free
-// fails ("free(): invalid size").  Both shims therefore:
-//
-//   * force the stream onto the classic locale at construction (OCCT's
-//     imbue(classic())/restore dance then stays inside the system universe),
-//   * deliberately increment the drained _Impl's reference count once per
-//     construction (see OcgPinInterposedLocale) so the drain can never reach
-//     zero -- a bare one-time pin is NOT enough because the drain is
-//     per-construction, not per-_Impl.
-//
-// The pin does not allocate: it bumps std::locale::_Impl's first member
-// (_M_references, an _Atomic_word) with the same primitive libstdc++ uses.
-// std::locale is layout-compatible with a single _Impl* and _Impl begins
-// with _M_references in every libstdc++ ABI; the bump itself is what keeps
-// the _Impl alive, and no owning object is required to be destroyed.
+    return """// Auto-generated std::iostream shims over Godot Callable -- DO NOT EDIT
 #pragma once
 
 #include <godot_cpp/variant/callable.hpp>
@@ -2095,22 +1979,16 @@ def generate_callable_streams_hpp() -> str:
 #include <istream>
 #include <locale>
 #include <ostream>
+#include <sstream>
 #include <streambuf>
 #include <string>
 
-namespace occt_gd {
+namespace ort_gd {
 
-// One phantom reference on the locale that basic_ios::init handed this stream
-// (the interposed Godot-global _Impl).  Nothing ever releases it, so that
-// _Impl's reference count can never reach zero regardless of how the two
-// libstdc++ copies mismatch their bookkeeping; the object leaks exactly once
-// and is never freed through the wrong allocator.
 inline void OcgPinInterposedLocale(const std::locale &p_replaced) {
     const void *const impl = *(const void *const *)&p_replaced;
     int *const refcount = static_cast<int *>(const_cast<void *>(impl));
 #if defined(_MSC_VER)
-    // MSVC has no GCC `__atomic_*` builtins; _InterlockedExchangeAdd is the
-    // same 32-bit fetch-add on the _Atomic_word (Windows long == int).
     _InterlockedExchangeAdd(reinterpret_cast<volatile long *>(refcount), 1);
 #else
     __atomic_fetch_add(refcount, 1, __ATOMIC_ACQ_REL);
@@ -2120,49 +1998,34 @@ inline void OcgPinInterposedLocale(const std::locale &p_replaced) {
 class OcgCallableOStream final : public std::ostream {
 public:
     explicit OcgCallableOStream(const ::godot::Callable &p_sink)
-        : std::ostream(&myBuffer), myBuffer(p_sink) {
+        : std::ostream(&myBuffer), mySink(p_sink) {
         OcgPinInterposedLocale(imbue(std::locale::classic()));
     }
 
-    // The std::ostream OCCT writes into.
-    std::ostream &stream() { return *this; }
+    ~OcgCallableOStream() override {
+        flush();
+    }
 
-    // The text written so far; valid until the next flush delivers it to the
-    // sink Callable (wrapper code captures this before flushing for the
-    // Print/Dump-style String-return sugar).
-    const std::string &str() const { return myBuffer.myText; }
+    std::string str() const {
+        return myBuffer.str();
+    }
+
+    std::ostream &stream() {
+        return *this;
+    }
 
 private:
-    class CallableBuffer : public std::streambuf {
+    class CallableSink final : public std::stringbuf {
     public:
-        explicit CallableBuffer(const ::godot::Callable &p_sink) : mySink(p_sink) {}
+        explicit CallableSink(const ::godot::Callable &p_sink) : mySink(p_sink) {}
 
-        std::string myText;
-
-        void deliver() {
-            if (myText.empty() || !mySink.is_valid()) {
-                return;
-            }
-            mySink.call(::godot::String::utf8(myText.c_str()));
-            myText.clear();
-        }
-
-    protected:
-        int_type overflow(int_type ch) override {
-            if (!traits_type::eq_int_type(ch, traits_type::eof())) {
-                myText.push_back(traits_type::to_char_type(ch));
-            }
-            return ch;
-        }
-
-        std::streamsize xsputn(const char *pData, std::streamsize pCount) override {
-            myText.append(pData, static_cast<std::size_t>(pCount));
-            return pCount;
-        }
-
-        // std::ostream::flush() (the wrapper's pre-return flush) lands here.
         int sync() override {
-            deliver();
+            std::string text = str();
+            if (!text.empty() && mySink.is_valid()) {
+                ::godot::String gd_str = ::godot::String::utf8(text.c_str());
+                mySink.call(gd_str);
+            }
+            str("");
             return 0;
         }
 
@@ -2170,7 +2033,8 @@ private:
         ::godot::Callable mySink;
     };
 
-    CallableBuffer myBuffer;
+    ::godot::Callable mySink;
+    CallableSink myBuffer{mySink};
 };
 
 class OcgCallableIStream final : public std::istream {
@@ -2180,39 +2044,37 @@ public:
         OcgPinInterposedLocale(imbue(std::locale::classic()));
     }
 
-    // The std::istream OCCT reads from.
-    std::istream &stream() { return *this; }
+    std::istream &stream() {
+        return *this;
+    }
 
 private:
-    class CallableSource : public std::streambuf {
+    class CallableSource final : public std::streambuf {
     public:
         explicit CallableSource(const ::godot::Callable &p_source) : mySource(p_source) {}
 
     protected:
         int_type underflow() override {
-            if (myDone) {
-                return traits_type::eof();
-            }
             if (gptr() < egptr()) {
                 return traits_type::to_int_type(*gptr());
             }
-            if (!mySource.is_valid()) {
+            if (myDone || !mySource.is_valid()) {
+                return traits_type::eof();
+            }
+            ::godot::String chunk = mySource.call();
+            if (chunk.is_empty()) {
                 myDone = true;
                 return traits_type::eof();
             }
-            ::godot::String next = mySource.call();
-            if (next.is_empty()) {
-                myDone = true;
-                return traits_type::eof();
-            }
-            myChunk = std::string(next.utf8().get_data());
+            ::godot::CharString utf8 = chunk.utf8();
+            myChunk.assign(utf8.get_data(), utf8.length());
             if (myChunk.empty()) {
                 myDone = true;
                 return traits_type::eof();
             }
-            char *begin = myChunk.data();
-            setg(begin, begin, begin + myChunk.size());
-            return traits_type::to_int_type(*begin);
+            char *base = myChunk.data();
+            setg(base, base, base + myChunk.size());
+            return traits_type::to_int_type(*gptr());
         }
 
     private:
@@ -2224,7 +2086,7 @@ private:
     CallableSource myBuffer;
 };
 
-} // namespace occt_gd
+} // namespace ort_gd
 """
 
 
@@ -2233,63 +2095,13 @@ private:
 # ---------------------------------------------------------------------------
 
 def generate_occt_memory_hpp() -> str:
-    """Standard::Allocate placement construction + deleter for unique_ptr
-    storage.
-
-    A unique_ptr-stored wrapper normally heap-builds its native with
-    ``std::make_unique<Cls>(...)``, which resolves to the class's plain
-    ``operator new(size_t)``.  That is not always available: allocator-tagged
-    classes (DEFINE_INC_ALLOC / DEFINE_NCOLLECTION_ALLOC) declare only an
-    allocator-parameterized operator new, which hides the plain form, and a
-    protected/private base carrying custom allocation hides it as well.  Such
-    classes are built on Standard::Allocate memory (placement new) and freed
-    through OcgStdAllocDeleter -- the same memory manager every
-    DEFINE_STANDARD_ALLOC operator new routes to anyway, so allocation
-    behavior is identical to a normal ``new Cls()``.
-    """
-    return """// Auto-generated OCCT memory helpers -- DO NOT EDIT
-//
-// See the wrappers using unique_ptr storage with a class whose operator
-// new/delete is not usable (allocator-tagged, or carried through a
-// protected/private base): the native object is placement-constructed on
-// Standard::Allocate memory and destroyed/freed through OcgStdAllocDeleter.
-// Every DEFINE_STANDARD_ALLOC operator new routes to Standard::Allocate too,
-// so this path is allocation-identical to a plain `new Cls()`.
+    return """// Auto-generated memory helpers -- DO NOT EDIT
 #pragma once
 
-#include <Standard.hxx>
+#include <memory>
 
-#include <cstddef>
-#include <utility>
-
-namespace occt_gd {
-
-template <typename T, typename... Args>
-T *occt_alloc_new(Args &&...args) {
-    void *p = Standard::Allocate(sizeof(T));
-    if (p == nullptr) {
-        return nullptr;
-    }
-    try {
-        return ::new (p) T(std::forward<Args>(args)...);
-    } catch (...) {
-        Standard::Free(p);
-        throw;
-    }
-}
-
-template <typename T>
-struct OcgStdAllocDeleter {
-    void operator()(T *p) const noexcept {
-        if (p == nullptr) {
-            return;
-        }
-        p->~T();
-        Standard::Free(p);
-    }
-};
-
-} // namespace occt_gd
+namespace ort_gd {
+} // namespace ort_gd
 """
 
 
@@ -2554,13 +2366,10 @@ def generate_all(modules: list[ModuleDecl], out_dir: Path,
 
     write("OcgEnums.hpp", generate_enums_hpp(modules))
     write("OcgEnums.cpp", generate_enums_cpp(modules))
-    keys = _primitive_wrapper_names_used(modules, ctx)
-    enum_boxes = _enum_box_keys_used(modules, ctx)
-    write("OcgPrimitiveWrappers.hpp", generate_primitive_wrappers(keys, enum_boxes))
+    write("OcgPrimitiveWrappers.hpp", generate_primitive_wrappers_hpp(modules, ctx))
     write("OcgCallableStreams.hpp", generate_callable_streams_hpp())
     write("OcgMemory.hpp", generate_occt_memory_hpp())
-    write("module.h", generate_module_h(module, wrappers, keys,
-                                        _enum_box_class_names(enum_boxes)))
+    write("module.h", generate_module_h(modules[0] if modules else ModuleDecl(name="Core"), wrappers, set(), set()))
 
     # Remove any wrapper files that are no longer generated (e.g. classes that
     # became skippable since the last run).
@@ -2571,11 +2380,11 @@ def generate_all(modules: list[ModuleDecl], out_dir: Path,
 
     if probe_out:
         from .audit import write_probe_parts
-        from .occt import find_occt_install
+        from .ort import find_ort_install
         project_root = Path(__file__).resolve().parent.parent.parent
         probe = Path(probe_out)
         probe.parent.mkdir(parents=True, exist_ok=True)
-        write_probe_parts(probe, modules, ctx, find_occt_install(project_root))
+        write_probe_parts(probe, modules, ctx, find_ort_install(project_root))
     return written
 
 

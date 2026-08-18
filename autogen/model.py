@@ -197,8 +197,9 @@ class FieldDecl:
 @dataclass
 class ClassDecl:
     name: str
-    wrapper_name: str = ""         # e.g. "OcgGpPnt" (set during classification)
-    module_name: str = ""          # e.g. "gp" (set during scanning)
+    cpp_qual_name: str = ""        # e.g. "::Ort::Env" or "::OrtEnv"
+    wrapper_name: str = ""         # e.g. "OrtEnv" (set during classification)
+    module_name: str = ""          # e.g. "Core" (set during scanning)
     base_classes: list[str] = field(default_factory=list)
     kind: ClassKind = ClassKind.OTHER
     is_transient_descendant: bool = False  # anywhere in hierarchy
@@ -302,7 +303,7 @@ def occt_name_to_wrapper(occt_name: str, module_name: str) -> str:
     clean = _sanitize_identifier(occt_name)
     parts = clean.replace("::", "_").split("_")
     camel = "".join(p[:1].upper() + p[1:] if p else "" for p in parts)
-    name = f"Ocg{camel}"
+    name = camel if camel.startswith("Ort") else f"Ort{camel}"
     # Nested template specializations (e.g. the 8-argument Extrema_GGExtPC)
     # can produce names far beyond the 255-byte filesystem limit; truncate
     # deterministically and disambiguate with a short hash of the full name.

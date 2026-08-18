@@ -644,6 +644,8 @@ def write_probe_parts(probe_path: Path, modules, ctx: tm.TypeContext,
     split across them.
     """
     all_classes = [cls for m in modules for cls in m.classes if not cls.skip]
+    if probe_path.is_dir():
+        probe_path = probe_path / "probe.cpp"
     dc_set = _default_constructible_set(all_classes)
     headers = probe_headers(all_classes, ctx, install)
     probe_path.write_text(generate_probe_tu(modules, ctx, install, headers))

@@ -541,6 +541,33 @@ def _extract_enum(cursor: Cursor, header: str, parent: str = "") -> EnumDecl | N
     )
 
 
+def _extract_base_methods(cursor: Cursor, class_name: str, cls: ClassDecl, seen_methods: set[str]) -> None:
+    for child in cursor.get_children():
+        if child.kind == CursorKind.CXX_BASE_SPECIFIER:
+            try:
+                base_type = child.type
+                base_decl = base_type.get_declaration()
+                if base_decl and base_decl.is_definition():
+                    for sub in base_decl.get_children():
+                        if sub.kind == CursorKind.CXX_METHOD:
+                            try:
+                                if sub.access_specifier == AccessSpecifier.PUBLIC:
+                                    m = _extract_method(sub, class_name)
+                                    if m and m.name not in seen_methods:
+                                        seen_methods.add(m.name)
+                                        if m.kind == MethodKind.STATIC_METHOD:
+                                            cls.static_methods.append(m)
+                                        elif m.kind == MethodKind.OPERATOR:
+                                            cls.operators.append(m)
+                                        else:
+                                            cls.methods.append(m)
+                            except Exception:
+                                pass
+                    _extract_base_methods(base_decl, class_name, cls, seen_methods)
+            except Exception:
+                pass
+
+
 def _extract_class(cursor: Cursor, header: str,
                    tu_root: Cursor | None = None,
                    defs: dict[str, Cursor | None] | None = None) -> ClassDecl:
@@ -577,7 +604,7 @@ def _extract_class(cursor: Cursor, header: str,
                 cls.constructors.append(ctor)
                 if (len(ctor.parameters) == 0
                         or all(p.default_value is not None
-                               for p in ctor.parameters)):
+                                for p in ctor.parameters)):
                     cls.has_public_default_ctor = True
         elif kind == CursorKind.CXX_METHOD:
             if child.spelling in ("operator new", "operator delete",
@@ -610,6 +637,9 @@ def _extract_class(cursor: Cursor, header: str,
             enum = _extract_enum(child, header, parent=name)
             if enum is not None:
                 cls.nested_enums.append(enum)
+
+    seen = {m.name for m in cls.methods + cls.static_methods + cls.operators}
+    _extract_base_methods(cursor, name, cls, seen)
     cls.has_pure_virtual = any(m.is_pure_virtual for m in cls.methods)
     cls.has_copy_assignment = not (
         _has_explicit_noncopyable(cursor)
@@ -645,10 +675,10 @@ def extract_header(header: Path, tu: TranslationUnit) -> HeaderResult:
     header = str(header)
     result = HeaderResult(header=header)
 
-    def is_occt_name(name: str) -> bool:
-        # OCCT classes begin with a module prefix (`gp_`, `math_`) or a capital.
-        # Lowercase names (e.g. `hash`, `tuple`) are C++ std/library helpers.
-        return not (name.islower() or name.isdigit() or not name)
+    def is_ort_name(name: str) -> bool:
+        if not name or name.startswith("_") or name in ("detail", "Base", "BaseMemoryInfo", "ConstSessionOptions"):
+            return False
+        return not (name.islower() or name.isdigit())
 
     def walk(cursor: Cursor, namespace: tuple[str, ...] = ()):
         for child in cursor.get_children():
@@ -660,23 +690,28 @@ def extract_header(header: Path, tu: TranslationUnit) -> HeaderResult:
                     continue
             except Exception:
                 continue
+            in_ort_scope = (not namespace) or (namespace == ("Ort",))
             if child.kind in (CursorKind.CLASS_DECL, CursorKind.STRUCT_DECL):
-                if child.is_definition() and not namespace \
-                        and is_occt_name(child.spelling):
+                if child.is_definition() and in_ort_scope \
+                        and is_ort_name(child.spelling):
                     try:
                         is_specialization = child.specialized_template is not None
                     except Exception:
                         is_specialization = False
                     if is_specialization:
                         continue  # class template specialization
-                    result.classes.append(
-                        _extract_class(child, header, tu.cursor, defs))
+                    cls_decl = _extract_class(child, header, tu.cursor, defs)
+                    if namespace == ("Ort",):
+                        cls_decl.cpp_qual_name = f"::Ort::{child.spelling}"
+                    else:
+                        cls_decl.cpp_qual_name = f"::{child.spelling}"
+                    result.classes.append(cls_decl)
             elif child.kind == CursorKind.ENUM_DECL and child.is_definition() \
-                    and not namespace:
+                    and in_ort_scope and is_ort_name(child.spelling):
                 enum = _extract_enum(child, header)
                 if enum is not None:
                     result.enums.append(enum)
-            elif child.kind == CursorKind.TYPEDEF_DECL:
+            elif child.kind == CursorKind.TYPEDEF_DECL and in_ort_scope:
                 t = make_type(child.underlying_typedef_type)
                 if t.is_enum or t.is_handle or t.is_collection or (
                         t.base_name and t.base_name[0].isupper()):
