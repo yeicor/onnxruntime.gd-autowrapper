@@ -1186,18 +1186,18 @@ def _method_body(cls: ClassDecl, method: MethodDecl,
 
     guard = ""
     if method.kind != MethodKind.STATIC_METHOD:
-        if cls.kind == ClassKind.REF_COUNTED:
+        if _cg(cls, ctx).storage == "handle":
             if rconv.cpp_type == "void":
-                guard = "        ERR_FAIL_COND(!_handle);\n"
+                guard = "        if (!_handle) return;\n"
             else:
-                guard = (f"        ERR_FAIL_COND_V(!_handle, "
-                         f"{tm.default_value(rconv.cpp_type)});\n")
+                guard = (f"        if (!_handle) return "
+                         f"{tm.default_value(rconv.cpp_type)};\n")
         elif _cg(cls, ctx).storage == "unique_ptr":
             if rconv.cpp_type == "void":
-                guard = "        ERR_FAIL_NULL(_native);\n"
+                guard = "        if (!_native) return;\n"
             else:
-                guard = (f"        ERR_FAIL_NULL_V(_native, "
-                         f"{tm.default_value(rconv.cpp_type)});\n")
+                guard = (f"        if (!_native) return "
+                         f"{tm.default_value(rconv.cpp_type)};\n")
 
     body_lines = [f"        {p}" for p in preludes]
     if postludes:
@@ -1362,12 +1362,12 @@ def _field_accessor_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
     cg = _cg(cls, ctx)
     if cg.storage == "handle":
         target = "(*_handle)"
-        get_guard_tmpl = "ERR_FAIL_COND_V(!_handle, {dflt});"
-        set_guard = "ERR_FAIL_COND(!_handle);"
+        get_guard_tmpl = "if (!_handle) return {dflt};"
+        set_guard = "if (!_handle) return;"
     elif cg.storage == "unique_ptr":
         target = "(*_native)"
-        get_guard_tmpl = "ERR_FAIL_NULL_V(_native, {dflt});"
-        set_guard = "ERR_FAIL_NULL(_native);"
+        get_guard_tmpl = "if (!_native) return {dflt};"
+        set_guard = "if (!_native) return;"
     else:
         target = "_native_ref()" if cg.inherited_native else "_native"
         get_guard_tmpl, set_guard = None, None
@@ -1652,6 +1652,8 @@ def _method_property_entries(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
                         get_method_unique_name(setter) if setter else ""))
     out: list[str] = []
     for name, gd, setter in entries:
+        if not setter:
+            continue
         out.append(
             f'    ClassDB::add_property(get_class_static(), '
             f'PropertyInfo(Variant::{gd}, "{name}", PROPERTY_HINT_NONE, "", '
@@ -1715,12 +1717,6 @@ def _bind_entries(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
             f'    ClassDB::bind_method(D_METHOD("_ocg_field_get_{snake}"), '
             f"&{cls.wrapper_name}::_ocg_field_get_{snake});")
         if sconv is None or f.is_const:
-            # Read-only property: no setter; pass "" to add_property.
-            out.append(
-                f'    ClassDB::add_property(get_class_static(), '
-                f'PropertyInfo(Variant::{gd}, "{snake}", PROPERTY_HINT_NONE, "", '
-                f'PROPERTY_USAGE_DEFAULT, "{cls.wrapper_name}"), '
-                f'"", "_ocg_field_get_{snake}");')
             continue
         out.append(
             f'    ClassDB::bind_method(D_METHOD("_ocg_field_set_{snake}", "value"), '
