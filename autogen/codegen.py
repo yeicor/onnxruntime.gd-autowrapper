@@ -1819,8 +1819,9 @@ def _enum_lines(enum) -> list[str]:
     """Lines declaring one standalone enum as a class-scope int64_t enum."""
     lines: list[str] = [f"    enum {enum.name} : int64_t {{"]
     for v in enum.values:
+        scope = f"::{enum.name}::" if enum.is_scoped else "::"
         lines.append(
-            f"        {enum.name}_{v.name} = static_cast<int64_t>(::{enum.name}::{v.name}),")
+            f"        {enum.name}_{v.name} = static_cast<int64_t>({scope}{v.name}),")
     lines.append("    };")
     return lines
 
