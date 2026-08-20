@@ -440,4 +440,21 @@ def ensure_occt_args(args: list[str], include_dir: Path) -> list[str]:
                     out[i] == "-isystem" and i + 1 < len(out) and out[i + 1] == d
                     for i in range(len(out))):
                 out += ["-isystem", d]
+    # Emscripten libc++/libc live in the sysroot's non-default subdirs that
+    # libclang's driver does not add (only em++ does): `include/c++/v1` for
+    # the C++ standard library and `include/compat` for the glibc-compat
+    # headers it references (e.g. `<xlocale.h>`).  Without them the ORT C++
+    # API headers fail to parse on wasm and the scan silently finds 0 classes.
+    if triplet == "wasm32-emscripten":
+        sysroot = _emscripten_sysroot()
+        if sysroot:
+            checks = {"include/c++/v1": lambda p: (p / "type_traits").is_file(),
+                      "include/compat": lambda p: p.is_dir()}
+            for sub, ok in checks.items():
+                d = str(sysroot / sub)
+                if ok(Path(d)) and not any(a == f"-isystem={d}" for a in out) \
+                        and not any(out[i] == "-isystem" and i + 1 < len(out)
+                                    and out[i + 1] == d
+                                    for i in range(len(out))):
+                    out += ["-isystem", d]
     return out
