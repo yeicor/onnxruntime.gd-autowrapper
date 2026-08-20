@@ -168,22 +168,22 @@ def _probe_type(t: OCCTType, ctx: tm.TypeContext) -> str:
 
 
 def _field_probe_line(cls, f, index: int) -> str:
-    """Probe the generated ``_ocg_field_get_/set_`` accessors of a public data
+    """Probe the generated ``_ort_field_get_/set_`` accessors of a public data
     member: the getter copy-constructs the field value and the setter assigns
     it, so a member type with implicitly deleted copy semantics (e.g. a class
     holding ``std::atomic`` through a template) makes the accessors ill-formed.
     ``std::declval`` cannot be *called* in an evaluated context, so the lambda
-    body reaches a reference through ``ocg_field_probe_ref`` (a never-executed
+    body reaches a reference through ``ort_field_probe_ref`` (a never-executed
     inline helper that dereferences a null pointer, making the copy/assign
     expressions compile or fail here).  Emitted as a function definition (like
     the ctor probes) since expression statements are invalid at namespace
-    scope; the ``ocg_field_`` function name carries the diagnostic marker."""
-    assign = (f"ocg_field_probe_ref<_C>().{f.name} = "
-              f"ocg_field_probe_ref<const _T>(); "
+    scope; the ``ort_field_`` function name carries the diagnostic marker."""
+    assign = (f"ort_field_probe_ref<_C>().{f.name} = "
+              f"ort_field_probe_ref<const _T>(); "
               if not f.is_const else "")
-    head = f"void ocg_field_{index:05d}() {{ (void)[] {{ using _C = ::{cls.name}; "
+    head = f"void ort_field_{index:05d}() {{ (void)[] {{ using _C = ::{cls.name}; "
     tail = f"using _T = std::remove_reference<decltype(std::declval<_C&>().{f.name})>::type; "
-    body = f"_T _v = ocg_field_probe_ref<const _C>().{f.name}; {assign}"
+    body = f"_T _v = ort_field_probe_ref<const _C>().{f.name}; {assign}"
     return head + tail + body + "}(); }"
 
 
@@ -213,7 +213,7 @@ def _probe_line(cls, method, index: int, ctx: tm.TypeContext) -> str:
     else:
         const = " const" if method.is_const else ""
         cast = f"static_cast<{ret} (::{cls.name}::*)({params}){const}>({target})"
-    return f"auto const ocg_sym_{index:05d} = {cast};"
+    return f"auto const ort_sym_{index:05d} = {cast};"
 
 
 # Constructor probes
@@ -257,7 +257,7 @@ def _probe_ctor_arg(t: OCCTType, dc_set: set[str]) -> str | None:
     ambiguous match when a class overloads on pointer/arithmetic types).
 
     A non-default-constructible value type is probed through a borrowed
-    reference (``ocg_field_probe_ref``, a null dereference never executed at
+    reference (``ort_field_probe_ref``, a null dereference never executed at
     runtime -- the probe TU is only compiled and nm'd).  That keeps the ctor's
     C1 symbol in the undefined-symbol set even when no value of the parameter
     type can be fabricated, closing a gap where ctors of newly-wrapped classes
@@ -288,7 +288,7 @@ def _probe_ctor_arg(t: OCCTType, dc_set: set[str]) -> str | None:
         return f"static_cast<{base}>(0)"
     if base in dc_set:
         return f"{base}()"
-    return f"ocg_field_probe_ref<const {base}>()"
+    return f"ort_field_probe_ref<const {base}>()"
 
 
 def _ctor_probe_line(cls, ctor, index: int, dc_set: set[str], ctx) -> str:
@@ -310,17 +310,17 @@ def _ctor_probe_line(cls, ctor, index: int, dc_set: set[str], ctx) -> str:
     if cg.storage == "handle":
         # `new Cls(args)` also covers plain unique_ptr storage (make_unique is
         # new underneath) and references the same C1 symbol + class operator new.
-        return (f"::{cls.name}* ocg_ctor_{index:05d}() "
+        return (f"::{cls.name}* ort_ctor_{index:05d}() "
                 f"{{ return new ::{cls.name}({joined}); }}")
     if cls.wrapper_name in ctx.stdalloc:
         # stdalloc wrappers placement-construct on Standard::Allocate memory and
         # never call the class operator new (which allocator-tagged classes hide
         # and protected bases make inaccessible); a discarded prvalue references
         # the same C1 ctor symbol without pulling in operator new.
-        return (f"void ocg_ctor_{index:05d}() "
+        return (f"void ort_ctor_{index:05d}() "
                 f"{{ (void)::{cls.name}({joined}); }}")
     # unique_ptr storage (plain operator new); the wrapper emits make_unique.
-    return (f"void ocg_ctor_{index:05d}() "
+    return (f"void ort_ctor_{index:05d}() "
             f"{{ (void)::{cls.name}({joined}); }}")
 
 
@@ -339,10 +339,10 @@ def _default_ctor_probe_line(cls, ctx, index: int) -> str:
     if cg.storage == "handle":
         if not (cls.has_public_default_ctor and not cls.is_abstract):
             return ""
-        return (f"::{cls.name}* ocg_dctor_{index:05d}() "
+        return (f"::{cls.name}* ort_dctor_{index:05d}() "
                 f"{{ return new ::{cls.name}(); }}")
     if cg.storage == "native" and not cg.inherited_native:
-        return (f"void ocg_dctor_{index:05d}() "
+        return (f"void ort_dctor_{index:05d}() "
                 f"{{ (void)::{cls.name}(); }}")
     return ""
 
@@ -365,9 +365,9 @@ def _copy_probe_line(cls, ctx, index: int) -> str:
     cg = _cg(cls, ctx)
     if cg.storage not in ("native", "unique_ptr"):
         return ""
-    helper = ("ocg_copy_probe_construct<_C>()" if cg.storage == "unique_ptr"
-              else "ocg_copy_probe_assign<_C>()")
-    return (f"void ocg_copy_{index:05d}() "
+    helper = ("ort_copy_probe_construct<_C>()" if cg.storage == "unique_ptr"
+              else "ort_copy_probe_assign<_C>()")
+    return (f"void ort_copy_{index:05d}() "
             f"{{ (void)[] {{ using _C = ::{cls.name}; {helper}; }}; }}")
 
 
@@ -571,7 +571,7 @@ def _probe_lines(classes, dc_set: set[str], ctx) -> list[str]:
 
 def _probe_preamble(headers) -> list[str]:
     """Shared preamble lines: the header closure plus the probe helper
-    templates (ocg_field_probe_ref / ocg_copy_probe_*)."""
+    templates (ort_field_probe_ref / ort_copy_probe_*)."""
     return (["// Auto-generated symbol audit probe TU -- DO NOT EDIT"]
             + [f"#include <{h.name}>" for h in headers]
             + ["",
@@ -580,7 +580,7 @@ def _probe_preamble(headers) -> list[str]:
                "",
                "// Compile-time-only reference into a hypothetical instance; the",
                "// field probes copy/assign through it without ever constructing.",
-               "template <typename T> inline T& ocg_field_probe_ref() noexcept {",
+               "template <typename T> inline T& ort_field_probe_ref() noexcept {",
                "    T* p = nullptr;",
                "    return *p;",
                "}",
@@ -588,11 +588,11 @@ def _probe_preamble(headers) -> list[str]:
                "// Template-wrapped copy probes (see _copy_probe_line): keeping the",
                "// copy operation inside a template anchors GCC's instantiation",
                "// chain at the probe line instead of inside an OCCT header.",
-               "template <typename T> inline void ocg_copy_probe_assign() {",
-               "    ocg_field_probe_ref<T>() = ocg_field_probe_ref<const T>();",
+               "template <typename T> inline void ort_copy_probe_assign() {",
+               "    ort_field_probe_ref<T>() = ort_field_probe_ref<const T>();",
                "}",
-               "template <typename T> inline void ocg_copy_probe_construct() {",
-               "    T a(ocg_field_probe_ref<const T>()); (void)a;",
+               "template <typename T> inline void ort_copy_probe_construct() {",
+               "    T a(ort_field_probe_ref<const T>()); (void)a;",
                "}",
                ""])
 
@@ -604,7 +604,7 @@ def _compose_probe(headers, lines: list[str]) -> str:
     out.append("// are disambiguated by explicit pointer casts.  The undefined symbols")
     out.append("// of this TU are the member/static symbols the wrappers will emit.")
     if not lines:
-        out.append("auto const ocg_sym_none = 0;")
+        out.append("auto const ort_sym_none = 0;")
     else:
         out.extend(lines)
     return "\n".join(out) + "\n"
@@ -639,7 +639,7 @@ def write_probe_parts(probe_path: Path, modules, ctx: tm.TypeContext,
     static class like ``IGESSolid`` used from an Interface method), so a part
     cannot get away with only its own modules' headers.  The per-module probe
     bodies are appended under unique namespaces, since each reuses index-local
-    symbol names (``ocg_sym_00000`` & co.).  Header parsing is thus duplicated
+    symbol names (``ort_sym_00000`` & co.).  Header parsing is thus duplicated
     across parts, but the template-instantiation work (the dominant cost) is
     split across them.
     """
@@ -671,9 +671,9 @@ def write_probe_parts(probe_path: Path, modules, ctx: tm.TypeContext,
     for i, group in enumerate(chosen):
         if not group:
             continue
-        # Every module's body reuses index-local symbol names (ocg_sym_00000 &
+        # Every module's body reuses index-local symbol names (ort_sym_00000 &
         # co.), so each is wrapped in a unique namespace to avoid collisions.
-        chunks = [f"namespace ocg_p{i}_m{k} {{\n{text}\n}}"
+        chunks = [f"namespace ort_p{i}_m{k} {{\n{text}\n}}"
                   for k, (_, text) in enumerate(group)]
         part = probe_path.with_name(f"{probe_path.stem}.part{i}.cpp")
         part.write_text(preamble + "\n".join(chunks) + "\n")
@@ -929,7 +929,7 @@ def _extract_illformed(stderr: str, probe_path: Path) -> set[str]:
     """Class::method names of probe lines rejected by the compiler.
 
     Every probe line is preceded by a ``// Class::method`` comment; GCC/Clang
-    diagnostics reference the offending ``ocg_sym_*`` line by file:line, so the
+    diagnostics reference the offending ``ort_sym_*`` line by file:line, so the
     nearest preceding comment names the method whose instantiation failed.
     """
     probe = probe_path.read_text().splitlines()
@@ -939,8 +939,8 @@ def _extract_illformed(stderr: str, probe_path: Path) -> set[str]:
         line = text.strip()
         if line.startswith("// ") and "::" in line:
             last_comment = line[3:].strip()
-        elif "ocg_sym_" in line or "ocg_ctor_" in line or "ocg_dctor_" in line \
-                or "ocg_field_" in line or "ocg_copy_" in line:
+        elif "ort_sym_" in line or "ort_ctor_" in line or "ort_dctor_" in line \
+                or "ort_field_" in line or "ort_copy_" in line:
             line_index[no] = last_comment
     out: set[str] = set()
     for m in re.finditer(rf"{re.escape(probe_path.name)}:(\d+):", stderr):

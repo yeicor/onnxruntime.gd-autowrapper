@@ -1,4 +1,4 @@
-"""Generate wrapper C++ (Ocg*.hpp/.cpp) + OcgEnums + module.h from IR.
+"""Generate wrapper C++ (Ort*.hpp/.cpp) + OrtEnums + module.h from IR.
 
 Output contract mirrors the legacy pipeline exactly (method names, factories,
 hash suffixes, stream absorption, guard macros, field accessors, enums).
@@ -201,7 +201,7 @@ def build_context(modules: list[ModuleDecl]) -> tm.TypeContext:
     # plain `operator new(size_t)` at all (allocator-tagged forms hide it), or
     # carry it through a protected/private base where it is inaccessible from
     # outside.  Such unique_ptr-stored wrappers allocate the native via
-    # Standard::Allocate placement new and free it through OcgStdAllocDeleter,
+    # Standard::Allocate placement new and free it through OrtStdAllocDeleter,
     # which never depends on the class's operator new/delete accessibility.
     from .classify import _has_custom_alloc
     stdalloc_by_name = {c.name: c for m in modules for c in m.classes}
@@ -338,7 +338,7 @@ def _default_constructible(cls: ClassDecl) -> bool:
 
 def _uses_stdalloc(cls: ClassDecl, ctx: tm.TypeContext) -> bool:
     """True when the wrapper heap-builds the native on Standard::Allocate
-    memory (OcgStdAllocDeleter) because the class's own operator new/delete is
+    memory (OrtStdAllocDeleter) because the class's own operator new/delete is
     not usable (allocator-tagged or carried through a protected base)."""
     return cls.wrapper_name in ctx.stdalloc
 
@@ -537,7 +537,7 @@ def _uses_primitive_wrappers(cls: ClassDecl, ctx: tm.TypeContext) -> bool:
 
 
 def _uses_enum_boxes(cls: ClassDecl, ctx: tm.TypeContext) -> bool:
-    """Class has a non-const `Enum&` out-parameter (needs OcgEnumBox classes)."""
+    """Class has a non-const `Enum&` out-parameter (needs OrtEnumBox classes)."""
     for method in cls.all_methods:
         for p in method.parameters:
             t = p.type
@@ -565,7 +565,7 @@ def _enum_box_keys_used(modules: list[ModuleDecl],
 
 
 def _enum_box_class_names(enum_box_decls: dict[str, object]) -> set[str]:
-    """Ocg<EnumName>Box class names for the given enum out-parameter decls."""
+    """Ort<EnumName>Box class names for the given enum out-parameter decls."""
     return {tm._enum_box_class_name(n) for n in enum_box_decls}
 
 
@@ -613,10 +613,10 @@ def _field_accessor_decls(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
         sconv = tm.cpp_param(f.type, "value", ctx)
         if gret is None or gret.cpp_type == "void":
             continue  # not readable (e.g. void* return)
-        lines.append(f"    {gret.cpp_type} _ocg_field_get_{snake}() const;")
+        lines.append(f"    {gret.cpp_type} _ort_field_get_{snake}() const;")
         if sconv is not None and not f.is_const:
             lines.append(
-                f"    void _ocg_field_set_{snake}({_field_setter_param(sconv)});")
+                f"    void _ort_field_set_{snake}({_field_setter_param(sconv)});")
     return lines
 
 
@@ -653,13 +653,13 @@ def _exception_method_body(cls: ClassDecl, method: MethodDecl,
     unique = _unique(method)
     const_suffix = " const" if method.is_const else ""
     if kind == "message":
-        body = "return ::godot::String(occt_gd::get_last_error_message());"
+        body = "return ::godot::String(ort_gd::get_last_error_message());"
     elif kind == "stack":
-        body = "return ::godot::String(occt_gd::get_last_error_stack());"
+        body = "return ::godot::String(ort_gd::get_last_error_stack());"
     elif kind == "type":
         body = f'return ::godot::String("{cls.name}");'
     else:  # print: the message, since exceptions have no native to stream.
-        body = "return ::godot::String(occt_gd::get_last_error_message());"
+        body = "return ::godot::String(ort_gd::get_last_error_message());"
     return f"""String {cls.wrapper_name}::{unique}({params}){const_suffix} {{
     {body}
 }}"""
@@ -912,13 +912,13 @@ def generate_class_hpp(cls: ClassDecl, ctx: tm.TypeContext) -> str:
     if cg.storage == "unique_ptr":
         out.append("#include <memory>")
         if _uses_stdalloc(cls, ctx):
-            out.append('#include "OcgMemory.hpp"')
+            out.append('#include "OrtMemory.hpp"')
     if _uses_primitive_wrappers(cls, ctx) or _uses_enum_boxes(cls, ctx):
-        out.append('#include "OcgPrimitiveWrappers.hpp"')
+        out.append('#include "OrtPrimitiveWrappers.hpp"')
     if _uses_streams(cls):
-        out.append('#include "OcgCallableStreams.hpp"')
+        out.append('#include "OrtCallableStreams.hpp"')
     if _uses_enums(cls, ctx):
-        out.append('#include "OcgEnums.hpp"')
+        out.append('#include "OrtEnums.hpp"')
     out.append("")
     if _uses_enums(cls, ctx):
         out.append("")
@@ -952,7 +952,7 @@ def generate_class_hpp(cls: ClassDecl, ctx: tm.TypeContext) -> str:
     elif cg.storage == "unique_ptr":
         if _uses_stdalloc(cls, ctx):
             out.append(f"    std::unique_ptr<{qual}, "
-                       f"occt_gd::OcgStdAllocDeleter<{qual}>> _native = nullptr;")
+                       f"ort_gd::OrtStdAllocDeleter<{qual}>> _native = nullptr;")
         else:
             out.append(f"    std::unique_ptr<{qual}> _native = nullptr;")
     elif cg.inherited_native:
@@ -1079,12 +1079,12 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
     wrong allocator.  We open the fstream ourselves, move it onto the classic
     locale (leaking the replaced locale so its reference is never dropped) and
     use the stream overload instead, so OCCT's locale dance stays inside a
-    single, consistent libstdc++ universe (see OcgCallableStreams.hpp).
+    single, consistent libstdc++ universe (see OrtCallableStreams.hpp).
     """
     if cls.name == "Standard_Dump" and method.name == "AddValuesSeparator":
         # OCCT's AddValuesSeparator only writes ", " when tellp() > 0, i.e.
         # when called mid-stream between already-dumped values.  The wrapper
-        # hands it a fresh OcgCallableOStream every call (the sink Callable is
+        # hands it a fresh OrtCallableOStream every call (the sink Callable is
         # the only durable state), so that check would never trigger and the
         # API would always return an empty string.  Write the separator
         # unconditionally instead.
@@ -1093,11 +1093,11 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
             return None
         return f"""String {cls.wrapper_name}::add_values_separator({params}) {{
     try {{
-        ort_gd::OcgCallableOStream ocg_os(theOStream);
-        ocg_os.stream() << ", ";
-        ::godot::String ocg_text = ::godot::String::utf8(ocg_os.str().c_str());
-        ocg_os.stream().flush();
-        return ocg_text;
+        ort_gd::OrtCallableOStream ort_os(theOStream);
+        ort_os.stream() << ", ";
+        ::godot::String ort_text = ::godot::String::utf8(ort_os.str().c_str());
+        ort_os.stream().flush();
+        return ort_text;
     }} ORT_GUARD_CATCH({{}});
 }}"""
     if cls.name != "BRepTools" or method.name not in ("Read", "Write"):
@@ -1114,7 +1114,7 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
     arg_exprs = []
     for p in method.parameters:
         if p is file_param:
-            arg_exprs.append("ocg_fs")
+            arg_exprs.append("ort_fs")
             continue
         conv = tm.cpp_param(p.type, p.name, ctx, cls)
         if conv is None:
@@ -1126,12 +1126,12 @@ def _custom_method_body(cls: ClassDecl, method: MethodDecl,
     stype = "std::ifstream" if method.name == "Read" else "std::ofstream"
     const_suffix = " const" if method.is_const else ""
     body_lines = [
-        f"        {stype} ocg_fs({file_param.name}.utf8().get_data());",
-        "        if (!ocg_fs)",
+        f"        {stype} ort_fs({file_param.name}.utf8().get_data());",
+        "        if (!ort_fs)",
         "            return false;",
-        "        new std::locale(ocg_fs.imbue(std::locale::classic()));",
+        "        new std::locale(ort_fs.imbue(std::locale::classic()));",
         f"        {call};",
-        "        return ocg_fs.good();",
+        "        return ort_fs.good();",
     ]
     return f"""bool {cls.wrapper_name}::{unique}({params}){const_suffix} {{
     try {{
@@ -1228,19 +1228,19 @@ def _inject_postludes(body: str, call: str, postludes: list[str]) -> str:
     if stripped == "{call};":
         return f"{call};\n        {post}"
     if stripped.startswith("return {call};"):
-        return (f"auto ocg_post_value = {call};\n"
+        return (f"auto ort_post_value = {call};\n"
                 f"        {post}\n"
-                "        return ocg_post_value;")
+                "        return ort_post_value;")
     m = re.match(r"^(\s*)(auto(?:&)?)\s+(\w+)\s*=\s*\{call\};", body, re.S)
     if m:
         return (f"{m.group(2)} {m.group(3)} = {call};\n"
                 f"        {post}"
                 f"{body[m.end():]}")
     # Any other shape embeds {call} inside the returned value: capture it into
-    # ocg_post_value, run the postludes, then evaluate the body against it.
-    return (f"auto ocg_post_value = {call};\n"
+    # ort_post_value, run the postludes, then evaluate the body against it.
+    return (f"auto ort_post_value = {call};\n"
             f"        {post}\n"
-            f"        {body.replace('{call}', 'ocg_post_value').lstrip()}")
+            f"        {body.replace('{call}', 'ort_post_value').lstrip()}")
 
 
 def _ctor_body(cls: ClassDecl, ctor: MethodDecl, ctx: tm.TypeContext) -> str:
@@ -1350,8 +1350,8 @@ def _sync_body(cls: ClassDecl, ctx: tm.TypeContext) -> str:
              f"(static_cast<::{cg.base_occt}*>(_handle.get()));"]
     # Propagate up the whole inheritance chain: the direct base's own
     # _sync_base_storage() copies its (just-set) handle to the next level, so a
-    # method taking e.g. Ref<OcgGeomSurface> sees a valid handle even when the
-    # concrete wrapper is OcgGeomBSplineSurface (two levels below).
+    # method taking e.g. Ref<OrtGeomSurface> sees a valid handle even when the
+    # concrete wrapper is OrtGeomBSplineSurface (two levels below).
     if cg.wrapper_base in ctx.sync_bases:
         lines.append(f"    {cg.wrapper_base}::_sync_base_storage();")
     return "\n".join(lines)
@@ -1383,7 +1383,7 @@ def _field_accessor_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
         if get_guard_tmpl is not None:
             guard = get_guard_tmpl.format(dflt=tm.default_value(gret.cpp_type))
             get_body = f"    {guard}\n    {get_body}"
-        out.append(f"""{gret.cpp_type} {cls.wrapper_name}::_ocg_field_get_{snake}() const {{
+        out.append(f"""{gret.cpp_type} {cls.wrapper_name}::_ort_field_get_{snake}() const {{
 {get_body}
 }}""")
         out.append("")
@@ -1392,7 +1392,7 @@ def _field_accessor_bodies(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
             set_body = f"{target}.{f.name} = {sconv.call_expr};"
             if set_guard is not None:
                 set_body = f"    {set_guard}\n    {set_body}"
-            out.append(f"""void {cls.wrapper_name}::_ocg_field_set_{snake}({_field_setter_param(sconv)}) {{{pre}
+            out.append(f"""void {cls.wrapper_name}::_ort_field_set_{snake}({_field_setter_param(sconv)}) {{{pre}
 {set_body}
 }}""")
             out.append("")
@@ -1714,18 +1714,18 @@ def _bind_entries(cls: ClassDecl, ctx: tm.TypeContext) -> list[str]:
             continue
         gd = gret.gd_type
         out.append(
-            f'    ClassDB::bind_method(D_METHOD("_ocg_field_get_{snake}"), '
-            f"&{cls.wrapper_name}::_ocg_field_get_{snake});")
+            f'    ClassDB::bind_method(D_METHOD("_ort_field_get_{snake}"), '
+            f"&{cls.wrapper_name}::_ort_field_get_{snake});")
         if sconv is None or f.is_const:
             continue
         out.append(
-            f'    ClassDB::bind_method(D_METHOD("_ocg_field_set_{snake}", "value"), '
-            f"&{cls.wrapper_name}::_ocg_field_set_{snake});")
+            f'    ClassDB::bind_method(D_METHOD("_ort_field_set_{snake}", "value"), '
+            f"&{cls.wrapper_name}::_ort_field_set_{snake});")
         out.append(
             f'    ClassDB::add_property(get_class_static(), '
             f'PropertyInfo(Variant::{gd}, "{snake}", PROPERTY_HINT_NONE, "", '
             f'PROPERTY_USAGE_DEFAULT, "{cls.wrapper_name}"), '
-            f'"_ocg_field_set_{snake}", "_ocg_field_get_{snake}");')
+            f'"_ort_field_set_{snake}", "_ort_field_get_{snake}");')
     out.extend(_method_property_entries(cls, ctx))
     # Godot's ClassDB keys integer constants per class by constant NAME (the
     # enum name is not part of the key), so enumerators repeated across nested
@@ -1812,13 +1812,23 @@ def generate_class_cpp(cls: ClassDecl, ctx: tm.TypeContext) -> str:
 
 
 # ---------------------------------------------------------------------------
-# OcgEnums
+# OrtEnums
 # ---------------------------------------------------------------------------
+
+def _enum_lines(enum) -> list[str]:
+    """Lines declaring one standalone enum as a class-scope int64_t enum."""
+    lines: list[str] = [f"    enum {enum.name} : int64_t {{"]
+    for v in enum.values:
+        lines.append(
+            f"        {enum.name}_{v.name} = static_cast<int64_t>(::{enum.name}::{v.name}),")
+    lines.append("    };")
+    return lines
+
 
 def generate_enums_hpp(modules: list[ModuleDecl]) -> str:
     enums = [e for m in modules for e in m.enums if e.is_public]
     out: list[str] = []
-    out.append("// Auto-generated host class for standalone OCCT enums -- DO NOT EDIT")
+    out.append("// Auto-generated host class for standalone ONNX Runtime enums -- DO NOT EDIT")
     out.append("#pragma once")
     out.append("")
     out.append(GODOT_INCLUDES)
@@ -1826,11 +1836,11 @@ def generate_enums_hpp(modules: list[ModuleDecl]) -> str:
     out.append("")
     out.append("namespace godot {")
     out.append("")
-    out.append("class OcgEnums : public RefCounted {")
-    out.append("    GDCLASS(OcgEnums, RefCounted)")
+    out.append("class OrtEnums : public RefCounted {")
+    out.append("    GDCLASS(OrtEnums, RefCounted)")
     out.append("")
     out.append("public:")
-    out.append("    OcgEnums() = default;")
+    out.append("    OrtEnums() = default;")
     out.append("")
     for enum in enums:
         out.extend(_enum_lines(enum))
@@ -1841,19 +1851,19 @@ def generate_enums_hpp(modules: list[ModuleDecl]) -> str:
     out.append("} // namespace godot")
     out.append("")
     for enum in enums:
-        out.append(f"VARIANT_ENUM_CAST(OcgEnums::{enum.name});")
+        out.append(f"VARIANT_ENUM_CAST(OrtEnums::{enum.name});")
     return "\n".join(out) + "\n"
 
 
 def generate_enums_cpp(modules: list[ModuleDecl]) -> str:
     enums = [e for m in modules for e in m.enums if e.is_public]
     out: list[str] = []
-    out.append("// Auto-generated host class for standalone OCCT enums -- DO NOT EDIT")
-    out.append('#include "OcgEnums.hpp"')
+    out.append("// Auto-generated host class for standalone ONNX Runtime enums -- DO NOT EDIT")
+    out.append('#include "OrtEnums.hpp"')
     out.append("")
     out.append("namespace godot {")
     out.append("")
-    out.append("void OcgEnums::_bind_methods() {")
+    out.append("void OrtEnums::_bind_methods() {")
     for enum in enums:
         for v in enum.values:
             out.append(f'    BIND_ENUM_CONSTANT({enum.name}_{v.name});')
@@ -1865,45 +1875,70 @@ def generate_enums_cpp(modules: list[ModuleDecl]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# OcgPrimitiveWrappers.hpp
+# OrtPrimitiveWrappers.hpp
 # ---------------------------------------------------------------------------
 
 _BOX_CLASSES = [
-    ("bool", ("OcgStandardBoolean", "bool", "BOOL",
+    ("bool", ("OrtStandardBoolean", "bool", "BOOL",
              "bool get_value() const { return _native; }",
              "void set_value(bool v) { _native = v; }")),
-    ("unsigned char", ("OcgStandardByte", "uint8_t", "INT",
+    ("unsigned char", ("OrtStandardByte", "uint8_t", "INT",
                       "uint8_t get_value() const { return _native; }",
                       "void set_value(uint8_t v) { _native = v; }")),
-    ("char", ("OcgStandardCharacter", "char", "INT",
+    ("char", ("OrtStandardCharacter", "char", "INT",
              "int32_t get_value() const { return (int32_t)_native; }",
              "void set_value(int32_t v) { _native = static_cast<char>(v); }")),
-    ("char16_t", ("OcgStandardChar16", "char16_t", "INT",
+    ("char16_t", ("OrtStandardChar16", "char16_t", "INT",
                  "int32_t get_value() const { return (int32_t)_native; }",
                  "void set_value(int32_t v) { _native = static_cast<char16_t>(v); }")),
-    ("int", ("OcgStandardInteger", "int32_t", "INT",
+    ("int", ("OrtStandardInteger", "int32_t", "INT",
             "int32_t get_value() const { return _native; }",
             "void set_value(int32_t v) { _native = v; }")),
-    ("long", ("OcgStandardLongInteger", "int64_t", "INT",
+    ("long", ("OrtStandardLongInteger", "int64_t", "INT",
              "int64_t get_value() const { return _native; }",
              "void set_value(int64_t v) { _native = static_cast<long>(v); }")),
-    ("double", ("OcgStandardReal", "double", "FLOAT",
+    ("double", ("OrtStandardReal", "double", "FLOAT",
                "double get_value() const { return _native; }",
                "void set_value(double v) { _native = v; }")),
-    ("float", ("OcgStandardShortReal", "float", "FLOAT",
+    ("float", ("OrtStandardShortReal", "float", "FLOAT",
               "float get_value() const { return _native; }",
               "void set_value(float v) { _native = v; }")),
-    ("unsigned long", ("OcgStandardULongInteger", "uint64_t", "INT",
+    ("unsigned long", ("OrtStandardULongInteger", "uint64_t", "INT",
                       "uint64_t get_value() const { return _native; }",
                       "void set_value(uint64_t v) { _native = static_cast<unsigned long>(v); }")),
-    ("unsigned int", ("OcgStandardUInteger", "uint32_t", "INT",
+    ("unsigned int", ("OrtStandardUInteger", "uint32_t", "INT",
                      "uint32_t get_value() const { return _native; }",
                      "void set_value(uint32_t v) { _native = v; }")),
 ]
 
 
+def _primitive_box_keys_used(modules: list[ModuleDecl],
+                             ctx: tm.TypeContext) -> set[str]:
+    """Canonical primitive types needing box classes in the scanned API.
+
+    Only primitive types that actually appear as non-const in/out parameters
+    (or non-const pointer parameters) anywhere in the scanned modules get a
+    box class, so the generated surface tracks the API rather than a hardcoded
+    list.
+    """
+    used: set[str] = set()
+    for module in modules:
+        for cls in module.classes:
+            if cls.skip:
+                continue
+            for method in cls.all_methods:
+                for p in method.parameters:
+                    t = p.type
+                    if (t.is_ref and not t.is_const) \
+                            or (t.is_pointer and not t.pointee_is_const):
+                        if t.base_name in tm.PRIMITIVE_WRAPPER_MAP:
+                            used.add(t.base_name)
+    return used
+
+
 def generate_primitive_wrappers_hpp(modules: list[ModuleDecl], ctx: tm.TypeContext) -> str:
     enum_boxes = _enum_box_keys_used(modules, ctx)
+    box_keys = _primitive_box_keys_used(modules, ctx)
     out: list[str] = []
     out.append("// Auto-generated primitive box classes for in/out parameters -- DO NOT EDIT")
     out.append("#pragma once")
@@ -1914,6 +1949,8 @@ def generate_primitive_wrappers_hpp(modules: list[ModuleDecl], ctx: tm.TypeConte
     out.append("namespace godot {")
     out.append("")
     for occt_type, (box_name, native_type, gd_type, getter, setter) in _BOX_CLASSES:
+        if occt_type not in box_keys:
+            continue
         out.append(f"class {box_name} : public RefCounted {{")
         out.append(f"    GDCLASS({box_name}, RefCounted)")
         out.append("public:")
@@ -1958,7 +1995,7 @@ def generate_primitive_wrappers_hpp(modules: list[ModuleDecl], ctx: tm.TypeConte
 
 
 # ---------------------------------------------------------------------------
-# OcgCallableStreams.hpp
+# OrtCallableStreams.hpp
 # ---------------------------------------------------------------------------
 
 def generate_callable_streams_hpp() -> str:
@@ -1981,7 +2018,7 @@ def generate_callable_streams_hpp() -> str:
 
 namespace ort_gd {
 
-inline void OcgPinInterposedLocale(const std::locale &p_replaced) {
+inline void OrtPinInterposedLocale(const std::locale &p_replaced) {
     const void *const impl = *(const void *const *)&p_replaced;
     int *const refcount = static_cast<int *>(const_cast<void *>(impl));
 #if defined(_MSC_VER)
@@ -1991,14 +2028,14 @@ inline void OcgPinInterposedLocale(const std::locale &p_replaced) {
 #endif
 }
 
-class OcgCallableOStream final : public std::ostream {
+class OrtCallableOStream final : public std::ostream {
 public:
-    explicit OcgCallableOStream(const ::godot::Callable &p_sink)
+    explicit OrtCallableOStream(const ::godot::Callable &p_sink)
         : std::ostream(&myBuffer), mySink(p_sink) {
-        OcgPinInterposedLocale(imbue(std::locale::classic()));
+        OrtPinInterposedLocale(imbue(std::locale::classic()));
     }
 
-    ~OcgCallableOStream() override {
+    ~OrtCallableOStream() override {
         flush();
     }
 
@@ -2033,11 +2070,11 @@ private:
     CallableSink myBuffer{mySink};
 };
 
-class OcgCallableIStream final : public std::istream {
+class OrtCallableIStream final : public std::istream {
 public:
-    explicit OcgCallableIStream(const ::godot::Callable &p_source)
+    explicit OrtCallableIStream(const ::godot::Callable &p_source)
         : std::istream(&myBuffer), myBuffer(p_source) {
-        OcgPinInterposedLocale(imbue(std::locale::classic()));
+        OrtPinInterposedLocale(imbue(std::locale::classic()));
     }
 
     std::istream &stream() {
@@ -2087,7 +2124,7 @@ private:
 
 
 # ---------------------------------------------------------------------------
-# OcgMemory.hpp
+# OrtMemory.hpp
 # ---------------------------------------------------------------------------
 
 def generate_occt_memory_hpp() -> str:
@@ -2137,10 +2174,10 @@ def generate_module_h(module: ModuleDecl, wrappers: list[ClassDecl],
     out.append("#include <godot_cpp/core/class_db.hpp>")
     out.append("#include <godot_cpp/godot.hpp>")
     out.append("")
-    out.append('#include "OcgEnums.hpp"')
-    out.append('#include "OcgCallableStreams.hpp"')
+    out.append('#include "OrtEnums.hpp"')
+    out.append('#include "OrtCallableStreams.hpp"')
     if primitive_keys or enum_box_names:
-        out.append('#include "OcgPrimitiveWrappers.hpp"')
+        out.append('#include "OrtPrimitiveWrappers.hpp"')
     for w in sorted({c.wrapper_name for c in wrappers}):
         out.append(f'#include "{w}.hpp"')
     out.append("")
@@ -2149,8 +2186,9 @@ def generate_module_h(module: ModuleDecl, wrappers: list[ClassDecl],
     out.append("inline void gdext_initialize_module_auto(godot::ModuleInitializationLevel p_level) {")
     out.append("    (void)p_level;")
     wrapper_names = {c.wrapper_name for c in wrappers}
-    for key in sorted(primitive_keys, key=lambda k: _PRIMITIVE_WRAPPERS[k][0]):
-        wclass = _PRIMITIVE_WRAPPERS[key][0]
+    _box_by_type = {t: b[0] for t, b in _BOX_CLASSES}
+    for key in sorted(primitive_keys, key=lambda k: _box_by_type[k]):
+        wclass = _box_by_type[key]
         # Primitive wrapper names that are also full generated wrappers (e.g.
         # TCollection_AsciiString) are registered by the wrapper loop below.
         if wclass in wrapper_names:
@@ -2158,7 +2196,7 @@ def generate_module_h(module: ModuleDecl, wrappers: list[ClassDecl],
         out.append(f"    godot::ClassDB::register_class<{wclass}>();")
     for box in sorted(enum_box_names):
         out.append(f"    godot::ClassDB::register_class<{box}>();")
-    out.append("    godot::ClassDB::register_class<OcgEnums>();")
+    out.append("    godot::ClassDB::register_class<OrtEnums>();")
     for w in _registration_order(wrappers):
         out.append(f"    godot::ClassDB::register_class<{w}>();")
     out.append("}")
@@ -2360,12 +2398,16 @@ def generate_all(modules: list[ModuleDecl], out_dir: Path,
             cls = modules[mi].classes[ci]
             _generate_class_serial(cls, ctx, out_dir, write)
 
-    write("OcgEnums.hpp", generate_enums_hpp(modules))
-    write("OcgEnums.cpp", generate_enums_cpp(modules))
-    write("OcgPrimitiveWrappers.hpp", generate_primitive_wrappers_hpp(modules, ctx))
-    write("OcgCallableStreams.hpp", generate_callable_streams_hpp())
-    write("OcgMemory.hpp", generate_occt_memory_hpp())
-    write("module.h", generate_module_h(modules[0] if modules else ModuleDecl(name="Core"), wrappers, set(), set()))
+    write("OrtEnums.hpp", generate_enums_hpp(modules))
+    write("OrtEnums.cpp", generate_enums_cpp(modules))
+    write("OrtPrimitiveWrappers.hpp", generate_primitive_wrappers_hpp(modules, ctx))
+    write("OrtCallableStreams.hpp", generate_callable_streams_hpp())
+    write("OrtMemory.hpp", generate_occt_memory_hpp())
+    primitive_keys = _primitive_box_keys_used(modules, ctx)
+    enum_boxes = _enum_box_keys_used(modules, ctx)
+    write("module.h", generate_module_h(
+        modules[0] if modules else ModuleDecl(name="Core"), wrappers,
+        primitive_keys, _enum_box_class_names(enum_boxes)))
 
     # Remove any wrapper files that are no longer generated (e.g. classes that
     # became skippable since the last run).

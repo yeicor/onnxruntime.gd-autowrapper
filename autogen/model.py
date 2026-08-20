@@ -290,15 +290,15 @@ _WRAPPER_NAME_MAX = 130
 
 
 def occt_name_to_wrapper(occt_name: str, module_name: str) -> str:
-    """Convert an OCCT class name to a wrapper name with Ocg prefix.
+    """Convert an OCCT class name to a wrapper name with Ort prefix.
 
     Examples:
-        gp_Pnt, gp              -> OcgGpPnt
-        TopoDS_Shape, TopoDS    -> OcgTopoDSShape
-        BRepPrimAPI_MakeBox, ... -> OcgBRepPrimAPIMakeBox
-        NCollection_Array2<gp_Pnt> -> OcgNCollectionArray2_gp_Pnt
-        Aspect_DisplayConnection -> OcgAspectDisplayConnection
-        Geom_BSplineSurface     -> OcgGeomBSplineSurface
+        gp_Pnt, gp              -> OrtGpPnt
+        TopoDS_Shape, TopoDS    -> OrtTopoDSShape
+        BRepPrimAPI_MakeBox, ... -> OrtBRepPrimAPIMakeBox
+        NCollection_Array2<gp_Pnt> -> OrtNCollectionArray2_gp_Pnt
+        Aspect_DisplayConnection -> OrtAspectDisplayConnection
+        Geom_BSplineSurface     -> OrtGeomBSplineSurface
     """
     clean = _sanitize_identifier(occt_name)
     parts = clean.replace("::", "_").split("_")

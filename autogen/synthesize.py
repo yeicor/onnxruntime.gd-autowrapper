@@ -178,7 +178,7 @@ def filter_unwrappable(classes: list[object], modules: list[ModuleDecl],
 
 _SPEC_RE = re.compile(r"^([A-Za-z_]\w*)<(.*)>$")
 
-_OCG_RE = re.compile(r"\bOcg[A-Za-z_][A-Za-z0-9_]*\b")
+_ORT_RE = re.compile(r"\bOrt[A-Za-z_][A-Za-z0-9_]*\b")
 
 _template_registry_cache: dict[str, str] | None = None
 
@@ -640,7 +640,7 @@ def _collect_demo_refs(project_root: Path) -> set[str]:
             text = p.read_text(encoding="utf-8")
         except OSError:
             continue
-        out.update(_OCG_RE.findall(text))
+        out.update(_ORT_RE.findall(text))
     return out
 
 
@@ -680,7 +680,7 @@ def _undeclarable_specs(specs: dict[str, tuple[str, list[str]]],
                         modules: list[ModuleDecl] | None = None) -> set[str]:
     """Spec keys whose template arguments are not publicly nameable.
 
-    A free-namespace ``using OcgUndeclN = Spec<args>;`` fails to compile when
+    A free-namespace ``using OrtUndeclN = Spec<args>;`` fails to compile when
     any argument names a private/protected nested type (e.g.
     ``NCollection_Array1<Aspect_VKeySet::KeyState>`` where ``KeyState`` is a
     private nested struct).  No wrapper can ever name such a type, so the spec
@@ -707,10 +707,10 @@ def _undeclarable_specs(specs: dict[str, tuple[str, list[str]]],
     includes = {i for i in includes if (include_dir / i).exists()}
     lines: list[str] = [f"#include <{i}>" for i in sorted(includes)]
     lines.append("")
-    lines.append("namespace ocg_undecl {")
+    lines.append("namespace ort_undecl {")
     key_lines: dict[str, int] = {}
     for i, key in enumerate(sorted(specs)):
-        lines.append(f"using OcgUndecl{i} = {key};")
+        lines.append(f"using OrtUndecl{i} = {key};")
         key_lines[key] = len(lines)
     lines.append("}")
     src = "\n".join(lines) + "\n"
@@ -770,7 +770,7 @@ def _unwrappable_specs(specs: dict[str, tuple[str, list[str]]], install: Path,
     includes = {i for i in includes if (include_dir / i).exists()}
     lines: list[str] = [f"#include <{i}>" for i in sorted(includes)]
     lines.append("")
-    lines.append("namespace ocg_abstract {")
+    lines.append("namespace ort_abstract {")
     key_lines: dict[str, int] = {}
     for i, key in enumerate(sorted(specs)):
         lines.append(f"static_assert(!std::is_abstract<{key}>::value, "
@@ -1132,7 +1132,7 @@ def _resolve_types(spellings: list[str], template_spec: str,
     incs = "\n".join(f"#include <{i}>" for i in includes)
     src = (f"#include <{includes[0]}>\n{incs}\n"
            f"template class {template_spec};\n"
-           f"namespace ocg_synth {{\n"
+           f"namespace ort_synth {{\n"
            f"struct AW_Scope : public {template_spec} {{\n{aliases}\n}};\n}}\n")
     with tempfile.NamedTemporaryFile(suffix=".cpp", mode="w", delete=False) as f:
         f.write(src)
@@ -1142,7 +1142,7 @@ def _resolve_types(spellings: list[str], template_spec: str,
         tu = index.parse(tmp, args=args + ["-x", "c++", "-I", str(include_dir)])
         out: dict[str, object] = {}
         for ns in tu.cursor.get_children():
-            if ns.kind == CursorKind.NAMESPACE and ns.spelling == "ocg_synth":
+            if ns.kind == CursorKind.NAMESPACE and ns.spelling == "ort_synth":
                 for s in ns.get_children():
                     if s.kind == CursorKind.STRUCT_DECL:
                         for ta in s.get_children():
@@ -1349,7 +1349,7 @@ def synth_template_spec(header_name: str, template_name: str,
     # class name: it is exactly the spelling the scanner reports for template
     # arguments in other classes' signatures, so build_context registers the
     # specialization -> wrapper mapping and `native` storage emits the full
-    # type in the generated header.  Wrapper naming derives Ocg-prefixed names
+    # type in the generated header.  Wrapper naming derives Ort-prefixed names
     # from it via occt_name_to_wrapper.
     cls.name = template_spec
     cls.base_classes = [_substitute(b, subst) for b in cls.base_classes]

@@ -170,8 +170,8 @@ def classify_module(module: ModuleDecl,
 
 
 def occt_wrapper_name(occt_name: str, module_name: str) -> str:
-    """Ocg prefix + camelized name (module aggregate keeps its plain name)."""
+    """Ort prefix + camelized name (module aggregate keeps its plain name)."""
     if occt_name == module_name:
-        return f"Ocg{occt_name}"
+        return f"Ort{occt_name}"
     from .model import occt_name_to_wrapper
     return occt_name_to_wrapper(occt_name, module_name)

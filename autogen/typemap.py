@@ -43,20 +43,20 @@ _SIZE_DERIVED_BUILTINS: frozenset[str] = frozenset(
     {"unsigned long", "unsigned long long"})
 
 # Non-const reference out-parameters of these canonical types become small
-# RefCounted box classes (see OcgPrimitiveWrappers.hpp).
+# RefCounted box classes (see OrtPrimitiveWrappers.hpp).
 PRIMITIVE_WRAPPER_MAP: dict[str, tuple[str, str]] = {
-    "bool": ("OcgStandardBoolean", "BOOL"),
-    "unsigned char": ("OcgStandardByte", "INT"),
-    "char": ("OcgStandardCharacter", "INT"),
-    "char16_t": ("OcgStandardChar16", "INT"),
-    "int": ("OcgStandardInteger", "INT"),
-    "long": ("OcgStandardLongInteger", "INT"),
-    "double": ("OcgStandardReal", "FLOAT"),
-    "float": ("OcgStandardShortReal", "FLOAT"),
-    "unsigned long": ("OcgStandardULongInteger", "INT"),
-    "unsigned int": ("OcgStandardUInteger", "INT"),
-    "TCollection_AsciiString": ("OcgTCollectionAsciiString", "STRING"),
-    "TCollection_ExtendedString": ("OcgTCollectionExtendedString", "STRING"),
+    "bool": ("OrtStandardBoolean", "BOOL"),
+    "unsigned char": ("OrtStandardByte", "INT"),
+    "char": ("OrtStandardCharacter", "INT"),
+    "char16_t": ("OrtStandardChar16", "INT"),
+    "int": ("OrtStandardInteger", "INT"),
+    "long": ("OrtStandardLongInteger", "INT"),
+    "double": ("OrtStandardReal", "FLOAT"),
+    "float": ("OrtStandardShortReal", "FLOAT"),
+    "unsigned long": ("OrtStandardULongInteger", "INT"),
+    "unsigned int": ("OrtStandardUInteger", "INT"),
+    "TCollection_AsciiString": ("OrtTCollectionAsciiString", "STRING"),
+    "TCollection_ExtendedString": ("OrtTCollectionExtendedString", "STRING"),
 }
 
 # Const raw pointers to these canonical primitives denote input arrays (the
@@ -315,13 +315,13 @@ _RESERVED_PARAM_NAMES: frozenset[str] = frozenset({
     "VARIANT_ENUM_CAST", "TypedArray",
     # Body locals emitted by the code generator
     "wrapper", "result", "ref", "value", "ok",
-    "ocg_os", "ocg_ss", "ocg_is", "ocg_len", "ocg_buf", "ocg_ret", "arg",
+    "ort_os", "ort_ss", "ort_is", "ort_len", "ort_buf", "ort_ret", "arg",
 })
 
 
 def safe_param_name(name: str) -> str:
     """A C++ identifier for a wrapper parameter that cannot shadow codegen locals."""
-    if name in _RESERVED_PARAM_NAMES or name.startswith("ocg_") or name.startswith("arg_"):
+    if name in _RESERVED_PARAM_NAMES or name.startswith("ort_") or name.startswith("arg_"):
         return f"arg_{name}"
     return name
 
@@ -367,8 +367,8 @@ def _container_iterator_param(t: OCCTType, name: str, cls,
     """
     if is_ctor or t.is_pointer or not _is_own_iterator_type(t, cls):
         return None
-    it = f"ocg_it_{name}"
-    idx = f"ocg_idx_{name}"
+    it = f"ort_it_{name}"
+    idx = f"ort_idx_{name}"
     prelude = (f"{t.base_name} {it}({_container_expr(cls, ctx)});\n"
                f"    for (int32_t {idx} = 0; {idx} < {name}; ++{idx}) "
                f"{{ {it}.Next(); }}")
@@ -493,25 +493,25 @@ def cpp_param(t: OCCTType, name: str, ctx: TypeContext,
             return conv
     if t.is_ref and stream == "out":
         # A Standard_OStream&/std::ostream& sink becomes a Godot Callable that
-        # receives the text OCCT writes.  The shared OcgCallableOStream shim
+        # receives the text OCCT writes.  The shared OrtCallableOStream shim
         # wraps it in a std::ostream; the accumulated text is also surfaced as
         # the wrapper's String return for Print/Dump-style methods (flush runs
         # before the return).
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"ort_gd::OcgCallableOStream ocg_os({name});",
-                         call_expr="ocg_os.stream()",
+                         prelude=f"ort_gd::OrtCallableOStream ort_os({name});",
+                         call_expr="ort_os.stream()",
                          is_ostream=True)
     if t.is_ref and stream == "ss":
         return ParamConv(cpp_type="String", gd_type="STRING", name=name,
-                         prelude=f"std::stringstream ocg_ss({name}.utf8().get_data());",
-                         call_expr="ocg_ss")
+                         prelude=f"std::stringstream ort_ss({name}.utf8().get_data());",
+                         call_expr="ort_ss")
     if t.is_ref and stream == "in":
         # A Standard_IStream&/std::istream& source becomes a Godot Callable
         # that OCCT pulls String chunks from as it reads (see the
-        # OcgCallableIStream shim).
+        # OrtCallableIStream shim).
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"ort_gd::OcgCallableIStream ocg_is({name});",
-                         call_expr="ocg_is.stream()")
+                         prelude=f"ort_gd::OrtCallableIStream ort_is({name});",
+                         call_expr="ort_is.stream()")
     if t.is_ref and not t.is_const:
         # Non-const reference = in/out parameter.  Primitives and strings use
         # the small box classes; wrapped OCCT value classes fall through to the
@@ -552,7 +552,7 @@ def cpp_param(t: OCCTType, name: str, ctx: TypeContext,
                                      call_expr=_rw(move, name))
                 return _enum_param(t, name, ctx, move=move)
             if t.is_enum:
-                # Non-const enum& out-parameter -> small OcgEnumBox; OCCT
+                # Non-const enum& out-parameter -> small OrtEnumBox; OCCT
                 # writes the result into the box's native storage in place.
                 box = _enum_box_param(t, name, ctx)
                 if box is not None:
@@ -636,13 +636,13 @@ def _cpp_pointer_param(t: OCCTType, name: str, ctx: TypeContext) -> ParamConv | 
         # Standard_OStream* / std::ostream* sink (e.g.
         # FastSewing::GetStatuses) — same Callable shim as the ref form.
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"ort_gd::OcgCallableOStream ocg_os({name});",
-                         call_expr="&ocg_os.stream()",
+                         prelude=f"ort_gd::OrtCallableOStream ort_os({name});",
+                         call_expr="&ort_os.stream()",
                          is_ostream=True)
     if skind == "in":
         return ParamConv(cpp_type="Callable", gd_type="CALLABLE", name=name,
-                         prelude=f"ort_gd::OcgCallableIStream ocg_is({name});",
-                         call_expr="&ocg_is.stream()")
+                         prelude=f"ort_gd::OrtCallableIStream ort_is({name});",
+                         call_expr="&ort_is.stream()")
     if b == "void":
         cast = "const void*" if t.pointee_is_const else "void*"
         return ParamConv(cpp_type="uint64_t", gd_type="INT", name=name,
@@ -706,7 +706,7 @@ def _enum_param(t: OCCTType, name: str, ctx: TypeContext, move: bool = False) ->
     """Map an enum-typed parameter; wrapped enums cross as their own type."""
     enum_decl = ctx.enums.get(t.base_name)
     if enum_decl is not None:
-        return ParamConv(cpp_type=f"OcgEnums::{t.base_name}", gd_type="INT", name=name,
+        return ParamConv(cpp_type=f"OrtEnums::{t.base_name}", gd_type="INT", name=name,
                          call_expr=f"static_cast<{_enum_occt_path(enum_decl)}>({_rw(move, name)})")
     # Any other enum crosses the FFI as an int, cast back to its own type.
     return ParamConv(cpp_type="int32_t", gd_type="INT", name=name,
@@ -715,14 +715,14 @@ def _enum_param(t: OCCTType, name: str, ctx: TypeContext, move: bool = False) ->
 
 def _enum_box_class_name(enum_name: str) -> str:
     """RefCounted box class for a non-const `Enum&` out-parameter."""
-    return "Ocg" + re.sub(r"[^A-Za-z0-9]", "_", enum_name) + "Box"
+    return "Ort" + re.sub(r"[^A-Za-z0-9]", "_", enum_name) + "Box"
 
 
 def _enum_box_param(t: OCCTType, name: str, ctx: TypeContext) -> ParamConv | None:
     """Map a non-const `Enum&` out-parameter to its small box class.
 
     OCCT writes the result into the caller's enum variable; the box exposes it
-    as an int `value` property (OcgEnumBoxes live in OcgPrimitiveWrappers.hpp,
+    as an int `value` property (OrtEnumBoxes live in OrtPrimitiveWrappers.hpp,
     emitted by codegen alongside the primitive boxes).
     """
     enum_decl = ctx.enums.get(t.base_name)
@@ -765,15 +765,15 @@ def _string_out_param(t: OCCTType, name: str) -> ParamConv:
     """
     kind = _char_pptr_kind(t)
     if kind == "const":
-        cs = f"ocg_cs_{name}"
-        p = f"ocg_p_{name}"
+        cs = f"ort_cs_{name}"
+        p = f"ort_p_{name}"
         return ParamConv(
             cpp_type="String", gd_type="STRING", name=name,
             prelude=(f"::godot::CharString {cs}({name}.utf8());\n"
                      f"        const char* {p} = {cs}.get_data();"),
             call_expr=p,
             postlude=f'{name} = ::godot::String::utf8({p} ? {p} : "");')
-    buf = f"ocg_buf_{name}"
+    buf = f"ort_buf_{name}"
     prelude = (f"std::string {buf}({name}.utf8().get_data());\n"
                f"        if ({buf}.size() < 64) {{ {buf}.resize(64); }}")
     if t.is_ref:
@@ -781,7 +781,7 @@ def _string_out_param(t: OCCTType, name: str) -> ParamConv:
         # reference, so an lvalue char* must be handed over (an rvalue from
         # .data() cannot bind to char*&). OCCT writes through the pointee or
         # re-points it; both are read back through the local pointer.
-        p = f"ocg_p_{name}"
+        p = f"ort_p_{name}"
         return ParamConv(cpp_type="String", gd_type="STRING", name=name,
                          prelude=prelude + f"\n        char* {p} = {buf}.data();",
                          call_expr=p,
@@ -808,7 +808,7 @@ def _ptr_ref_out_param(t: OCCTType, name: str, ctx: TypeContext) -> ParamConv | 
     w = ctx.wrapped[key]
     if w in ctx.no_storage:
         return None
-    pvar = f"ocg_p_{name}"
+    pvar = f"ort_p_{name}"
     guard = f"if ({pvar} && !{name}.is_null())"
     if w in ctx.handles:
         postlude = f"{guard} {{ {name}->_handle = {pvar}; }}"
@@ -828,7 +828,7 @@ def cpp_return(t: OCCTType, ctx: TypeContext, has_ostream: bool = False,
     """Map a return type.
 
     ``has_ostream``: the method consumes a Standard_OStream& (the text is
-    captured into ocg_os and surfaced as the return value).
+    captured into ort_os and surfaced as the return value).
     ``stream_in``: the safe name of the Standard_IStream& parameter this
     method consumed; a chainable reader returning that same stream by
     reference (BinTools::GetReal, *Set::ReadCurve...) surfaces the Callable
@@ -849,7 +849,7 @@ def cpp_return(t: OCCTType, ctx: TypeContext, has_ostream: bool = False,
 
 
 def _with_ostream_flush(body: str) -> str:
-    """Insert ``ocg_os.stream().flush();`` between the OCCT call and the return.
+    """Insert ``ort_os.stream().flush();`` between the OCCT call and the return.
 
     ``body`` is a return-body template containing the ``{call}`` placeholder.
     For ``return <expr>;`` bodies the expression is evaluated into a temp first
@@ -858,10 +858,10 @@ def _with_ostream_flush(body: str) -> str:
     """
     stripped = body.lstrip()
     if stripped.startswith("return "):
-        return ("auto ocg_result = {call};\n"
-                "        ocg_os.stream().flush();\n"
-                "        return ocg_result;")
-    return re.sub(r"\{call\};", "{call};\n        ocg_os.stream().flush();",
+        return ("auto ort_result = {call};\n"
+                "        ort_os.stream().flush();\n"
+                "        return ort_result;")
+    return re.sub(r"\{call\};", "{call};\n        ort_os.stream().flush();",
                   body, count=1)
 
 
@@ -870,14 +870,14 @@ def _cpp_return_core(t: OCCTType, ctx: TypeContext, has_ostream: bool,
     if has_ostream and (stream_kind(t) is not None or
                         (t.base_name == "void" and not t.is_pointer)):
         # Print/Dump(Standard_OStream&) -> Standard_OStream& or void: the
-        # stream argument was captured into ocg_os by the parameter
+        # stream argument was captured into ort_os by the parameter
         # conversion, so surface the text that would have been written (the
         # text is captured before the flush delivers it to the Callable sink).
         return RetConv(cpp_type="String", gd_type="STRING",
                        body="{call};\n"
-                            "        ::godot::String ocg_text = ::godot::String::utf8(ocg_os.str().c_str());\n"
-                            "        ocg_os.stream().flush();\n"
-                            "        return ocg_text;")
+                            "        ::godot::String ort_text = ::godot::String::utf8(ort_os.str().c_str());\n"
+                            "        ort_os.stream().flush();\n"
+                            "        return ort_text;")
     if t.is_ref and stream_in is not None and stream_kind(t) == "in":
         # Chainable reader (BinTools::GetReal, BinTools_CurveSet::ReadCurve...)
         # returning the very Standard_IStream& it consumed: the caller passed a
