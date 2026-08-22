@@ -158,9 +158,8 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
     try:
         install = find_ort_install(PROJECT_ROOT)
     except FileNotFoundError as e:
-        print(f"regenerate     : {e}", file=sys.stderr)
-        print("regenerate     : no ORT install found; skipping generation", file=sys.stderr)
-        return 0
+        print(f"regenerate     : error: {e}", file=sys.stderr)
+        return 1
     try:
         import clang.cindex
     except ImportError:
@@ -179,6 +178,9 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
     irs = sorted(str(p) for p in out_dir.glob("*.json"))
+    if not irs:
+        print("regenerate     : error: no IR files generated from scan-all", file=sys.stderr)
+        return 1
 
     rc = _run_cli(["generate-all", *irs, "--out", str(args.out)])
     if rc != 0:
@@ -188,6 +190,7 @@ def cmd_regenerate(args: argparse.Namespace) -> int:
     stamp.write_text(f"ort={install.version}\n")
     print(f"regenerate     : stamp written to {stamp}")
     return 0
+
 
 
 def make_parser() -> argparse.ArgumentParser:

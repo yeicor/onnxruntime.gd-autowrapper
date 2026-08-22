@@ -22,7 +22,28 @@ from . import typemap as tm
 # Fixed source blocks
 # ---------------------------------------------------------------------------
 
-GODOT_INCLUDES = """#include <godot_cpp/classes/ref_counted.hpp>
+GODOT_INCLUDES = """#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#if defined(_WIN32) || defined(_MSC_VER)
+#undef min
+#undef max
+#undef K
+#undef C
+#undef M
+#undef Y
+#undef Surface
+#undef GetObject
+#undef FAR
+#undef NEAR
+#undef pascal
+#undef small
+#undef DOMAIN
+#endif
+#include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/variant.hpp>

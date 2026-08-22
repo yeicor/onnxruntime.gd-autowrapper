@@ -41,19 +41,28 @@ class ORTInstall:
     def header(self, name: str) -> Path:
         p = self.include_dir / name
         if not p.exists():
-            # Check subdirectories if any
-            sub = self.include_dir / "onnxruntime" / "core" / "session" / name
-            if sub.exists():
-                return sub
+            for sub_path in [
+                self.include_dir / "onnxruntime" / name,
+                self.include_dir / "onnxruntime" / "core" / "session" / name,
+                self.include_dir / "core" / "session" / name,
+            ]:
+                if sub_path.exists():
+                    return sub_path
+            matches = list(self.include_dir.glob(f"**/{name}"))
+            if matches:
+                return matches[0]
         return p
 
 
 def _read_version(include_dir: Path) -> str:
     vh = include_dir / "onnxruntime_c_api.h"
     if not vh.exists():
-        sub = include_dir / "onnxruntime" / "core" / "session" / "onnxruntime_c_api.h"
-        if sub.exists():
-            vh = sub
+        for sub in [include_dir / "onnxruntime" / "core" / "session" / "onnxruntime_c_api.h",
+                    include_dir / "onnxruntime" / "onnxruntime_c_api.h",
+                    include_dir / "core" / "session" / "onnxruntime_c_api.h"]:
+            if sub.exists():
+                vh = sub
+                break
         else:
             return "1.23.2"
     try:
@@ -74,25 +83,33 @@ def find_ort_install(project_root: Path | None = None) -> ORTInstall:
         candidates.append((Path(explicit), "explicit"))
     if project_root is not None:
         triplet = os.environ.get("VCPKG_DEFAULT_TRIPLET", "x64-linux")
+        candidates.append((project_root / "vcpkg" / "installed" / triplet / "include" / "onnxruntime", "vcpkg"))
         candidates.append((project_root / "vcpkg" / "installed" / triplet / "include", "vcpkg"))
+        candidates.append((project_root / "vcpkg" / "installed" / triplet / "lib" / "onnxruntime.framework" / "Headers", "vcpkg"))
+        inst_root = project_root / "vcpkg" / "installed"
+        if inst_root.exists():
+            for inst_dir in inst_root.glob("*/include"):
+                candidates.append((inst_dir / "onnxruntime", "vcpkg"))
+                candidates.append((inst_dir, "vcpkg"))
+            for framework_dir in inst_root.glob("*/lib/onnxruntime.framework/Headers"):
+                candidates.append((framework_dir, "vcpkg"))
+
     # System fallback
     candidates.append((Path("/usr/include/onnxruntime"), "system"))
     candidates.append((Path("/usr/include"), "system"))
 
     for include_dir, source in candidates:
+        if not include_dir.exists():
+            continue
         if (include_dir / "onnxruntime_c_api.h").exists() or (include_dir / "onnxruntime_cxx_api.h").exists():
             return ORTInstall(include_dir=include_dir, source=source, version=_read_version(include_dir))
-        sub = include_dir / "onnxruntime" / "core" / "session"
-        if (sub / "onnxruntime_c_api.h").exists():
-            return ORTInstall(include_dir=include_dir, source=source, version=_read_version(sub))
+        for sub in [include_dir / "onnxruntime", include_dir / "onnxruntime" / "core" / "session", include_dir / "core" / "session"]:
+            if (sub / "onnxruntime_c_api.h").exists() or (sub / "onnxruntime_cxx_api.h").exists():
+                return ORTInstall(include_dir=include_dir, source=source, version=_read_version(sub))
 
-    # If build is ongoing or directory exists
-    if project_root is not None:
-        triplet = os.environ.get("VCPKG_DEFAULT_TRIPLET", "x64-linux")
-        inc = project_root / "vcpkg" / "installed" / triplet / "include"
-        return ORTInstall(include_dir=inc, source="vcpkg", version="1.23.2")
-
-    return ORTInstall(include_dir=Path("/usr/include"), source="system", version="1.23.2")
+    raise FileNotFoundError(
+        "No ONNX Runtime install found; set ONNXRUNTIME_INCLUDE_DIR or install via vcpkg "
+        f"(checked: {[str(d) for d, _ in candidates] or 'none'}).")
 
 
 _install: ORTInstall | None = None

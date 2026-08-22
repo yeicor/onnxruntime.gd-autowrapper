@@ -118,8 +118,8 @@ def _param_default(cursor: Cursor) -> str | None:
             return None
         if start.offset is None or end.offset is None:
             return None
-        with open(start.file.name) as f:
-            text = f.read()[start.offset:end.offset]
+        with open(start.file.name, "rb") as f:
+            text = f.read()[start.offset:end.offset].decode("utf-8", errors="replace")
     except (OSError, IndexError, AttributeError):
         return None
     text = text.strip()
